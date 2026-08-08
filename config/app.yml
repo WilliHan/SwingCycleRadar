@@ -1,0 +1,9 @@
+db_path: ./data/swingcycle.db
+log_level: INFO
+
+http:
+  timeout_sec: 20
+  max_retries: 3
+
+backfill:
+  min_lookback_days: 350

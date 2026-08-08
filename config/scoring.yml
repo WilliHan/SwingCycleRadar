@@ -1,0 +1,32 @@
+# SwingCycle_Radar_Source_Level_Design_v1.1.md 27장(+ 14.2 신설)
+reversal:
+  weights:
+    dow: 45
+    macd: 30
+    rsi: 25
+  thresholds:
+    ready: 70
+    entry: 80
+    strong_entry: 90
+  rsi:
+    min_entry: 25.0
+  adx_gate:
+    flat_slope_abs_max: 0.25
+    mdi_slope_window: 3
+    adx_slope_window: 3
+
+pullback:
+  thresholds:
+    ready: 65
+    entry: 75
+  macd_min: 0.0
+  rsi_min: 50.0
+  adx_min: 30.0
+
+late_stage:
+  prepare: 60
+  partial_take_profit: 75
+  ma5_distance_z_min: 1.5
+
+risk:
+  stop_buffer_pct: 1.0

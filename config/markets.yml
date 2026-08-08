@@ -1,0 +1,33 @@
+# SwingCycle_Radar_Source_Level_Design_v1.1.md 6.3
+krx_direct:
+  home_url: https://data.krx.co.kr/contents/MDC/MDI/outerLoader/index.cmd
+  otp_url: https://data.krx.co.kr/comm/fileDn/GenerateOTP/generate.cmd
+  download_url: https://data.krx.co.kr/comm/fileDn/download_csv/download.cmd
+  json_url: https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd
+  stat_bld: dbms/MDC/STAT/standard/MDCSTAT01501
+  menu_id: MDC0201020101
+  login_page: https://data.krx.co.kr/contents/MDC/COMS/client/MDCCOMS001.cmd
+  login_jsp: https://data.krx.co.kr/contents/MDC/COMS/client/view/login.jsp?site=mdc
+  login_url: https://data.krx.co.kr/contents/MDC/COMS/client/MDCCOMS001D1.cmd
+  request:
+    date_param: trdDd
+    date_format: "%Y%m%d"
+  response:
+    output_key_candidates: [OutBlock_1, output, block1]
+  kdm_block_markers:
+    - "이용 제한 안내"
+    - "자동화 수단을 통한 비정상 대량 조회"
+    - "해당 ip의 접속이 일시적으로 제한"
+    - "탐지일로부터 1일간 접속이 제한"
+
+open_api_marketplace:   # 승인 완료 후 대체 어댑터용, v1.1 시점에는 미사용
+  enabled: false
+  base_url: ${KRX_BASE_URL}
+  auth_header: AUTH_KEY
+  services:
+    kospi_daily: {api_id: TBD_FROM_KRX_SPEC, path: TBD_FROM_KRX_SPEC}
+    kosdaq_daily: {api_id: TBD_FROM_KRX_SPEC, path: TBD_FROM_KRX_SPEC}
+
+fallback:
+  enabled: true
+  provider: pykrx

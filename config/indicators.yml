@@ -1,0 +1,25 @@
+# SwingCycle_Radar_Source_Level_Design_v1.1.md 8장/9.3.1/10.1.1
+pivot:
+  left_bars: 2
+  right_bars: 2
+  price_mode: wick
+  pivot_equal_tolerance_pct: 0.20
+
+dow_state:
+  downtrend_confirm_run: 2
+  uptrend_confirm_run: 1
+  range_lookback_pivots: 4
+  range_amplitude_shrink_pct: 20.0
+
+cycle_state:
+  adx_lookback_peak_window: 20
+
+adx_gate:
+  flat_slope_abs_max: 0.25
+  mdi_slope_window: 3
+  adx_slope_window: 3
+
+volume_oscillator:
+  method: sma  # sma | ema
+  fast: 10
+  slow: 20
