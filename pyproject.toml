@@ -38,3 +38,8 @@ swingcycle = "swingcycle.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/swingcycle"]
+
+[tool.pytest.ini_options]
+# 저장소 루트에서 `pip install -e .` 없이 그냥 `pytest`를 실행해도
+# `swingcycle` 모듈을 찾도록 한다 (전문가 리뷰에서 지적된 실행 전제 조건 문제).
+pythonpath = ["src"]

@@ -36,6 +36,34 @@ def test_sync_from_supabase_hard_delete_is_soft_locally(conn):
     assert row["deleted_upstream"] == 1
 
 
+def test_collectable_symbols_keeps_disabled_symbol_with_active_plan(conn):
+    """전문가 리뷰 회귀 테스트: enabled=false여도 ACTIVE trade_plan이 있으면 수집 대상 유지."""
+    import uuid
+    from datetime import datetime
+
+    symbol_repo.sync_from_supabase(conn, [
+        {"symbol": "005930", "name": "삼성전자", "friend_group": "semiconductor", "enabled": True},
+        {"symbol": "000660", "name": "SK하이닉스", "friend_group": "semiconductor", "enabled": True},
+    ])
+    now = datetime.now().isoformat()
+    conn.execute(
+        "INSERT INTO trade_plans (plan_id, symbol, created_date, entry_type, stop_price, status) "
+        "VALUES (?, '005930', ?, 'REVERSAL', 100.0, 'ACTIVE')",
+        (str(uuid.uuid4()), now),
+    )
+    conn.commit()
+
+    # 005930을 비활성화(신규 진입 금지) — 하지만 ACTIVE 플랜이 있으므로 계속 수집돼야 한다
+    symbol_repo.sync_from_supabase(conn, [
+        {"symbol": "005930", "name": "삼성전자", "friend_group": "semiconductor", "enabled": False},
+        {"symbol": "000660", "name": "SK하이닉스", "friend_group": "semiconductor", "enabled": True},
+    ])
+
+    collectable = set(symbol_repo.collectable_symbols(conn))
+    assert collectable == {"005930", "000660"}, "ACTIVE 플랜 보유 종목은 비활성화돼도 수집 대상에서 빠지면 안 된다"
+    assert set(symbol_repo.active_symbols(conn)) == {"000660"}, "active_symbols는 여전히 enabled=1만 반환해야 한다"
+
+
 def test_backfill_market_does_not_override_manual_value(conn):
     symbol_repo.sync_from_supabase(conn, [{"symbol": "005930", "name": "삼성전자", "friend_group": "semiconductor", "enabled": True}])
     symbol_repo.backfill_market_if_missing(conn, "005930", "KOSPI")

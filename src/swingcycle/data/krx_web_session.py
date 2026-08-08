@@ -80,6 +80,23 @@ class KRXWebSession:
             self._login_result = result
             return self._session if result.get("status") == "ok" else None
 
+    @staticmethod
+    def _patch_pykrx(sess: requests.Session) -> None:
+        """pykrx 내부 요청 메서드를 인증된 세션으로 monkey-patch한다.
+
+        전문가 리뷰에서 발견된 버그 수정: get_authenticated_session()을 호출만 하고
+        반환값을 pykrx에 실제로 주입하지 않으면 pykrx.stock.* 호출은 여전히
+        pykrx 자체의 (미인증) 세션을 쓴다 — sugup-report의 pykrx_session.py가
+        이 패치를 하는 이유와 동일하다.
+        """
+        try:
+            from pykrx.website.comm import webio
+        except ImportError:  # pragma: no cover - pykrx 미설치 환경
+            logger.warning("[krx_web_session] pykrx가 설치되지 않아 세션 패치를 건너뜁니다")
+            return
+        webio.Post.read = lambda self, **p: sess.post(self.url, headers=self.headers, data=p)
+        webio.Get.read = lambda self, **p: sess.get(self.url, headers=self.headers, params=p)
+
     def _reset(self) -> None:
         if self._session is not None:
             try:
@@ -117,7 +134,8 @@ class KRXWebSession:
 
             if code == "CD001":
                 self._session = sess
-                logger.info("[krx_web_session] KRX 로그인 성공")
+                self._patch_pykrx(sess)
+                logger.info("[krx_web_session] KRX 로그인 성공 + pykrx 세션 패치 완료")
                 return {"status": "ok"}
             if code == "CD005":
                 sess.close()

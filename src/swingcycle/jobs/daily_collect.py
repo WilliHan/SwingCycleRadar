@@ -32,7 +32,7 @@ def run_collect(trade_date: date) -> dict:
             logger.info("[daily_collect] %s", exc)
             return {"status": "NO_TRADING_DAY", "trade_date": trade_date.isoformat()}
 
-        universe = set(symbol_repo.active_symbols(conn))
+        universe = set(symbol_repo.collectable_symbols(conn))
         if not universe:
             logger.warning("[daily_collect] 활성 종목이 없습니다 — seed_friend_universe.py 실행 여부 확인")
             return {"status": "EMPTY_UNIVERSE", "trade_date": trade_date.isoformat()}

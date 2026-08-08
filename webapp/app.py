@@ -18,6 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from common.hub_bridge import resolve_hub_identity  # noqa: E402
 from swingcycle.data.supabase_client import get_supabase_client  # noqa: E402
+from swingcycle.repositories.db import get_connection  # noqa: E402
+from swingcycle.repositories.symbol_repo import has_active_trade_plan  # noqa: E402
 
 st.set_page_config(page_title="SwingCycle Radar", page_icon="🧭", layout="wide")
 
@@ -48,6 +50,10 @@ def render_universe_management(identity) -> None:
     if identity is None:
         st.warning("허브 인증 정보를 확인할 수 없습니다 — 읽기 전용으로 표시합니다.")
 
+    st.caption(
+        "표에서 행을 지우면 즉시 삭제되지 않고 **비활성화(enabled=false)** 됩니다. "
+        "완전 삭제는 아래 '완전 삭제' 섹션에서 별도로 확인 후 진행하세요."
+    )
     edited = st.data_editor(
         df,
         num_rows="dynamic",
@@ -59,14 +65,19 @@ def render_universe_management(identity) -> None:
     if st.button("저장", disabled=identity is None):
         _save_universe_diff(client, df, edited, identity)
 
+    if not df.empty:
+        _render_hard_delete_section(client, df, identity)
+
 
 def _save_universe_diff(client, original: pd.DataFrame, edited: pd.DataFrame, identity) -> None:
+    """행 삭제는 soft-disable(enabled=false)로만 반영한다 — 완전 삭제는 별도 확인 절차(8장) 필요.
+
+    전문가 리뷰에서 발견된 버그 수정: 이전에는 표에서 행이 사라지면 바로
+    client.table(...).delete()를 호출해 즉시 하드 삭제됐다.
+    """
     original_symbols = set(original["symbol"]) if not original.empty else set()
     edited_symbols = set(edited["symbol"].dropna())
-
-    deleted = original_symbols - edited_symbols
-    for symbol in deleted:
-        client.table("swingcycle_symbols").delete().eq("symbol", symbol).execute()
+    removed_from_grid = original_symbols - edited_symbols
 
     upsert_rows = []
     for _, row in edited.iterrows():
@@ -81,11 +92,54 @@ def _save_universe_diff(client, original: pd.DataFrame, edited: pd.DataFrame, id
             "note": row.get("note") or None,
             "updated_by": identity.email,
         })
+    # 표에서 지워진 종목은 하드 삭제 대신 enabled=false로 upsert (soft-disable 기본값)
+    for symbol in removed_from_grid:
+        original_row = original.loc[original["symbol"] == symbol].iloc[0]
+        upsert_rows.append({
+            "symbol": symbol,
+            "name": original_row.get("name") or "",
+            "market": original_row.get("market") or None,
+            "friend_group": original_row.get("friend_group") or None,
+            "enabled": False,
+            "note": original_row.get("note") or None,
+            "updated_by": identity.email,
+        })
+
     if upsert_rows:
         client.table("swingcycle_symbols").upsert(upsert_rows).execute()
 
-    st.success(f"저장 완료: upsert {len(upsert_rows)}건, 삭제 {len(deleted)}건")
+    st.success(f"저장 완료: upsert {len(upsert_rows)}건 (표에서 지운 {len(removed_from_grid)}건은 비활성화 처리)")
     st.rerun()
+
+
+def _render_hard_delete_section(client, df: pd.DataFrame, identity) -> None:
+    """완전 삭제 — 8장 "완전 삭제 별도 확인 버튼" + 7.3 "활성 플랜 경고"."""
+    with st.expander("⚠️ 완전 삭제 (되돌릴 수 없음)"):
+        symbol_options = df["symbol"].dropna().tolist()
+        target = st.selectbox("완전 삭제할 종목코드", options=[""] + symbol_options, key="hard_delete_target")
+        if not target:
+            return
+
+        try:
+            conn = get_connection()
+            has_active = has_active_trade_plan(conn, target)
+            conn.close()
+        except Exception:
+            has_active = None  # 로컬 DB 조회 실패 시에도 삭제 자체는 차단하지 않음 — 경고만 못 띄움
+
+        if has_active:
+            st.error(
+                f"'{target}'은(는) 로컬에 ACTIVE 트레이드 플랜이 있습니다. "
+                "완전 삭제해도 진행 중인 포지션 기록은 남지만, 신규 진입 판단용 유니버스에서는 사라집니다."
+            )
+        elif has_active is None:
+            st.warning("로컬 DB에서 활성 플랜 여부를 확인하지 못했습니다 (DB 접근 실패).")
+
+        confirm_text = st.text_input(f"확인을 위해 종목코드 '{target}'를 그대로 입력하세요", key="hard_delete_confirm")
+        if st.button("완전 삭제 실행", disabled=(identity is None or confirm_text != target)):
+            client.table("swingcycle_symbols").delete().eq("symbol", target).execute()
+            st.success(f"'{target}' 완전 삭제 완료")
+            st.rerun()
 
 
 def render_backtest_placeholder() -> None:

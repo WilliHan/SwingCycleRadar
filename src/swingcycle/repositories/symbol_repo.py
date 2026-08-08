@@ -60,6 +60,25 @@ def active_symbols(conn: sqlite3.Connection) -> list[str]:
     return [r["symbol"] for r in rows]
 
 
+def collectable_symbols(conn: sqlite3.Connection) -> list[str]:
+    """일일 수집 대상 종목: enabled=1 인 종목 + (비활성/upstream 삭제됐어도) ACTIVE
+    trade_plan이 남아있는 종목.
+
+    설계 7.3 — "비활성화는 신규 진입 금지를 의미하지, 기존 포지션 방치를 의미하지
+    않는다." active_symbols()만 쓰면 disable/삭제 직후 열려 있는 포지션의 STOP/EXIT
+    판정을 계속할 데이터가 끊긴다(전문가 리뷰에서 발견).
+    """
+    rows = conn.execute(
+        """
+        SELECT DISTINCT s.symbol
+        FROM symbols s
+        LEFT JOIN trade_plans tp ON tp.symbol = s.symbol AND tp.status = 'ACTIVE'
+        WHERE s.enabled = 1 OR tp.symbol IS NOT NULL
+        """
+    ).fetchall()
+    return [r["symbol"] for r in rows]
+
+
 def has_active_trade_plan(conn: sqlite3.Connection, symbol: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM trade_plans WHERE symbol = ? AND status = 'ACTIVE' LIMIT 1", (symbol,)
