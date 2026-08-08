@@ -64,6 +64,26 @@ def test_collectable_symbols_keeps_disabled_symbol_with_active_plan(conn):
     assert set(symbol_repo.active_symbols(conn)) == {"000660"}, "active_symbols는 여전히 enabled=1만 반환해야 한다"
 
 
+def test_collectable_symbols_survives_missing_symbols_row(conn):
+    """전문가 리뷰 2차 지적 회귀 테스트: symbols row 자체가 없어도(비정상 복구 상황)
+    trade_plans에 ACTIVE가 있으면 수집 대상에 들어와야 한다."""
+    import uuid
+    from datetime import datetime
+
+    now = datetime.now().isoformat()
+    # symbols에는 아예 없는 종목코드로 ACTIVE trade_plan만 존재하는 비정상 상태를 재현
+    conn.execute(
+        "INSERT INTO trade_plans (plan_id, symbol, created_date, entry_type, stop_price, status) "
+        "VALUES (?, '999999', ?, 'REVERSAL', 100.0, 'ACTIVE')",
+        (str(uuid.uuid4()), now),
+    )
+    conn.commit()
+
+    assert conn.execute("SELECT 1 FROM symbols WHERE symbol='999999'").fetchone() is None
+
+    assert "999999" in symbol_repo.collectable_symbols(conn)
+
+
 def test_backfill_market_does_not_override_manual_value(conn):
     symbol_repo.sync_from_supabase(conn, [{"symbol": "005930", "name": "삼성전자", "friend_group": "semiconductor", "enabled": True}])
     symbol_repo.backfill_market_if_missing(conn, "005930", "KOSPI")
