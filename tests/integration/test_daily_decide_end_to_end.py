@@ -124,6 +124,7 @@ class TestEndToEnd:
             conn, symbol="005930", created_date="2025-06-01", entry_type="REVERSAL",
             stop_price=last_bar["low"] + 1000.0,  # 무조건 체결되도록 아주 높게
         )
+        conn.commit()  # run_decide()는 별도 커넥션을 여니, create_plan(더 이상 자체 commit 안 함)을 여기서 커밋해야 보인다
 
         result = run_decide(last_date)
         assert result["stopped"] == 1
@@ -146,6 +147,7 @@ class TestEndToEnd:
             conn, symbol="005930", created_date="2025-06-01", entry_type="REVERSAL",
             stop_price=last_bar["low"] + 1000.0,
         )
+        conn.commit()  # create_plan은 더 이상 자체 commit하지 않으므로(리뷰 수정) 테스트가 직접 커밋
 
         run_decide(last_date)
         run_decide(last_date, force=True)  # 재실행해도
@@ -155,3 +157,54 @@ class TestEndToEnd:
         assert conn.execute(
             "SELECT COUNT(*) FROM scores_daily WHERE symbol='005930' AND trade_date = ?", (last_date.isoformat(),)
         ).fetchone()[0] == 1
+
+    def test_failure_between_stop_and_save_rolls_back_atomically(self, conn, monkeypatch):
+        """리뷰 지적 사항의 실패 주입 재현: check_and_apply_stop() 이후, save_analysis()
+        전에 예외가 나면 플랜 종료/STOP·RESET 이벤트까지 전부 롤백돼야 한다 — 그래야
+        재실행 시 플랜이 여전히 ACTIVE라 STOP이 다시 정상 감지된다."""
+        last_date = _seed_symbol_and_bars(conn, "005930", n_days=60, trend=-0.5)
+        last_bar = conn.execute(
+            "SELECT low FROM daily_bars WHERE symbol='005930' AND trade_date = ?", (last_date.isoformat(),)
+        ).fetchone()
+        plan_id = trade_plan_repo.create_plan(
+            conn, symbol="005930", created_date="2025-06-01", entry_type="REVERSAL",
+            stop_price=last_bar["low"] + 1000.0,  # 반드시 체결되도록
+        )
+        conn.commit()
+
+        import swingcycle.jobs.daily_decide as daily_decide_module
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("주입된 실패 — 지표 계산 단계")
+
+        # monkeypatch.context()로 범위를 좁힌다 — 이 fixture는 conn 픽스처와 같은
+        # monkeypatch 인스턴스를 공유하므로, 최상위 monkeypatch.setattr()을 쓰고 나중에
+        # monkeypatch.undo()를 부르면 conn 픽스처가 설정한 settings.db_path 패치까지
+        # 같이 풀려서 이후 run_decide()가 전혀 다른(진짜) DB 파일을 보게 된다(실제로 겪은
+        # 테스트 버그 — EMPTY_UNIVERSE로 나타남). with 블록으로 이 패치만 격리해 되돌린다.
+        with monkeypatch.context() as m:
+            m.setattr(daily_decide_module, "compute_all_indicators", _boom)
+            result = run_decide(last_date)
+            assert result["errors"], "실패가 daily_decide 레벨에서 잡혀 errors에 기록돼야 한다"
+
+        # 롤백 확인: 플랜은 여전히 ACTIVE, STOP/RESET 이벤트도 없음, scores_daily도 없음.
+        plan = conn.execute("SELECT status FROM trade_plans WHERE plan_id = ?", (plan_id,)).fetchone()
+        assert plan["status"] == "ACTIVE"
+        assert trade_plan_repo.list_events(conn, plan_id) == []
+        assert conn.execute(
+            "SELECT COUNT(*) FROM scores_daily WHERE symbol='005930' AND trade_date = ?", (last_date.isoformat(),)
+        ).fetchone()[0] == 0
+
+        # with 블록을 벗어나 compute_all_indicators는 이미 원상복구된 상태 — 재실행하면
+        # STOP이 이번엔 정상적으로 끝까지 처리돼야 한다.
+        result2 = run_decide(last_date, force=True)
+        assert result2["stopped"] == 1
+        assert result2["errors"] == []
+
+        plan_after = conn.execute("SELECT status FROM trade_plans WHERE plan_id = ?", (plan_id,)).fetchone()
+        assert plan_after["status"] == "STOPPED"
+        assert [e["event_type"] for e in trade_plan_repo.list_events(conn, plan_id)] == ["STOP", "RESET"]
+        row = conn.execute(
+            "SELECT action FROM scores_daily WHERE symbol='005930' AND trade_date = ?", (last_date.isoformat(),)
+        ).fetchone()
+        assert row["action"] == "STOP"

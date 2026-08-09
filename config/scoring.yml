@@ -14,6 +14,7 @@ reversal:
     flat_slope_abs_max: 0.25
     mdi_slope_window: 3
     adx_slope_window: 3
+  no_new_low_lookback_days: 5  # 12.1 "최근 3~5일 저점 갱신 없음"
 
 pullback:
   thresholds:
@@ -22,11 +23,15 @@ pullback:
   macd_min: 0.0
   rsi_min: 50.0
   adx_min: 30.0
+  rsi_support_band: 3.0          # 14.1 "50 부근" 판정 밴드(|RSI-50|<=이 값)
+  rsi_support_lookback_days: 5   # 이 기간 내 50 부근 접촉 여부 확인
 
 late_stage:
   prepare: 60
   partial_take_profit: 75
   ma5_distance_z_min: 1.5
+  rsi_lh_streak_min: 2           # 15장 "RSI LH가 2회 이상 누적"
+  near_prior_high_pct: 2.0       # 15장 "전고점/박스상단 근접" 판정 범위
 
 risk:
   stop_buffer_pct: 1.0

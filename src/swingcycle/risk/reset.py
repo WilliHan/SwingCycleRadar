@@ -15,7 +15,9 @@ from ..repositories import trade_plan_repo
 
 
 def apply_stop_and_reset(conn: sqlite3.Connection, *, plan_id: str, trade_date: str, fill_price: float) -> None:
-    """stop 체결 확정 시 호출. 16.4의 close_plan -> emit(STOP) -> emit(RESET) 순서를 그대로 따른다."""
+    """stop 체결 확정 시 호출. 16.4의 close_plan -> emit(STOP) -> emit(RESET) 순서를 그대로 따른다.
+    commit은 하지 않는다(trade_plan_repo 계약) — 호출부가 그날의 scores_daily 저장까지
+    묶어서 한 번에 commit/rollback해야 STOP 처리가 원자적으로 유지된다."""
     trade_plan_repo.close_plan(conn, plan_id, status="STOPPED")
     trade_plan_repo.record_event(
         conn, plan_id=plan_id, trade_date=trade_date, event_type="STOP", price=fill_price,

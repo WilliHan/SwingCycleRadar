@@ -3,6 +3,12 @@
 모든 upsert는 (trade_date, symbol) 또는 (symbol, pivot_date, pivot_type) PK 기준
 `ON CONFLICT DO UPDATE`라 같은 날짜를 몇 번 재실행해도 행이 늘지 않는다(idempotent).
 
+**커밋 책임은 호출자에게 있다** — `save_analysis`도 `check_and_apply_stop`도
+`conn.commit()`을 호출하지 않는다(trade_plan_repo와 동일 계약). 한 종목의 하루치
+처리(STOP 확인 → 지표/피벗/스코어링 → 저장)를 호출부(jobs/daily_decide.py)가
+하나의 트랜잭션으로 묶어 마지막에 한 번만 commit/rollback해야, STOP으로 플랜을
+닫아놓고 그 뒤 계산이 실패하는 부분 반영 상태가 생기지 않는다.
+
 trade_plans/trade_events는 이 모듈이 직접 만들지 않는다 — ENTRY/ADD/TAKE_PROFIT_PARTIAL은
 "시스템의 제안"이고 실제 플랜 시작/증액/일부익절은 사용자가 UI에서 확정하는 별도 행동이다
 (13장 "비중 숫자는 시스템이 주문하지 않는다"는 원칙을 ADD 외의 모든 포지션 변경에도
@@ -48,8 +54,10 @@ def get_prior_cycle_state(conn: sqlite3.Connection, symbol: str, trade_date: dat
 
 def check_and_apply_stop(conn: sqlite3.Connection, *, symbol: str, trade_date: date, bar: pd.Series) -> bool:
     """오늘 봉이 활성 플랜의 stop_price를 건드렸는지 확인하고, 그렇다면 즉시
-    16.3(체결 시뮬레이션)+16.4(RESET)를 기계적으로 처리한다. STOP이 감지되면 True —
-    호출부(daily_decide.py)는 이 경우 evaluate()를 아예 부르지 않고 그 날은 STOP으로 종결한다."""
+    16.3(체결 시뮬레이션)+16.4(RESET)를 기계적으로 처리한다(플랜 종료+STOP/RESET 이벤트
+    기록 — 아직 commit은 안 함). STOP이 감지되면 True를 반환하고, 호출부는 이 결과를
+    이어서 evaluate()의 action을 STOP으로 덮어쓰는 데 사용한다(scoring 자체는 계속
+    진행 — 21장 리포트가 STOP 카드도 보여줘야 하므로)."""
     plan = trade_plan_repo.get_active_plan(conn, symbol)
     if plan is None:
         return False
@@ -153,11 +161,11 @@ def save_analysis(
     conn: sqlite3.Connection, *, decision: Decision, indicators_row: pd.Series, pivots: list[Pivot],
     dow_state: str, pivot_config: PivotConfig = PivotConfig(),
 ) -> None:
-    """indicators_daily/pivots/cycle_daily/scores_daily를 한 트랜잭션으로 upsert.
-    전부 PK 충돌 시 갱신이라 같은 (symbol, trade_date)를 몇 번 다시 호출해도 안전하다."""
+    """indicators_daily/pivots/cycle_daily/scores_daily를 upsert. 전부 PK 충돌 시
+    갱신이라 같은 (symbol, trade_date)를 몇 번 다시 호출해도 안전하다.
+    commit은 하지 않는다 — 호출부가 STOP 처리 등과 묶어 한 번에 commit해야 한다."""
     symbol, trade_date = decision.symbol, decision.trade_date
     _upsert_indicators(conn, symbol, trade_date, indicators_row)
     _upsert_pivots(conn, symbol, pivots, pivot_config)
     _upsert_cycle(conn, symbol, trade_date, decision, dow_state, pivots)
     _upsert_scores(conn, symbol, trade_date, decision)
-    conn.commit()

@@ -40,12 +40,26 @@ def _load_pivot_config() -> PivotConfig:
 
 
 def _load_derivation_config() -> DerivationConfig:
+    """DerivationConfig의 모든 필드를 config/{indicators,scoring}.yml에서 채운다.
+    필드가 하나라도 여기 안 채워지면 YAML을 바꿔도 조용히 dataclass 기본값으로
+    남는 문제가 있었다(리뷰에서 발견) — 새 필드를 추가할 땐 반드시 여기도 같이 채울 것."""
     indicators_cfg = load_yaml_config("indicators.yml")
     scoring_cfg = load_yaml_config("scoring.yml")
+    pivot_cfg = indicators_cfg.get("pivot", {})
+    reversal_cfg = scoring_cfg.get("reversal", {})
+    pullback_cfg = scoring_cfg.get("pullback", {})
+    late_stage_cfg = scoring_cfg.get("late_stage", {})
+
+    defaults = DerivationConfig()
     return DerivationConfig(
-        right_bars=indicators_cfg.get("pivot", {}).get("right_bars", 2),
-        pullback_adx_min=scoring_cfg.get("pullback", {}).get("adx_min", 30.0),
-        late_stage_ma5_z_min=scoring_cfg.get("late_stage", {}).get("ma5_distance_z_min", 1.5),
+        right_bars=pivot_cfg.get("right_bars", defaults.right_bars),
+        no_new_low_lookback=reversal_cfg.get("no_new_low_lookback_days", defaults.no_new_low_lookback),
+        pullback_adx_min=pullback_cfg.get("adx_min", defaults.pullback_adx_min),
+        late_stage_ma5_z_min=late_stage_cfg.get("ma5_distance_z_min", defaults.late_stage_ma5_z_min),
+        rsi_lh_streak_min_for_accumulating=late_stage_cfg.get("rsi_lh_streak_min", defaults.rsi_lh_streak_min_for_accumulating),
+        near_prior_high_pct=late_stage_cfg.get("near_prior_high_pct", defaults.near_prior_high_pct),
+        rsi_support_band=pullback_cfg.get("rsi_support_band", defaults.rsi_support_band),
+        rsi_support_lookback=pullback_cfg.get("rsi_support_lookback_days", defaults.rsi_support_lookback),
     )
 
 
@@ -127,9 +141,16 @@ def run_decide(trade_date: date, force: bool = False, stop_buffer_pct: float = 1
                 if not force and decision_repo.has_scores_row(conn, symbol, trade_date):
                     counts["skipped_already_done"] += 1
                     continue
+                # _process_symbol 안의 check_and_apply_stop/save_analysis는 전부 commit을
+                # 안 하는 계약이다(repo 모듈 docstring 참고) — 여기서 한 종목의 하루치 작업을
+                # 통째로 하나의 트랜잭션으로 묶는다. 중간에 예외가 나면 rollback해서 "플랜은
+                # STOP으로 닫혔는데 그날 분석 결과는 없는" 부분 반영 상태를 방지한다 —
+                # 그래야 재실행 시 플랜이 여전히 ACTIVE라 STOP이 다시 정상 감지된다.
                 outcome = _process_symbol(conn, symbol, trade_date, pivot_cfg, deriv_cfg, stop_buffer_pct)
+                conn.commit()
                 counts[outcome] = counts.get(outcome, 0) + 1
             except Exception as exc:  # noqa: BLE001 — 종목 하나 실패가 나머지를 막으면 안 됨
+                conn.rollback()
                 logger.exception("[daily_decide] symbol=%s 처리 실패", symbol)
                 errors.append({"symbol": symbol, "error": str(exc)})
 

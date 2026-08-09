@@ -2,10 +2,14 @@
 
 STOP 감지(활성 플랜의 체결 여부)는 여기 포함하지 않는다 — 그건 "오늘 이미 보유한
 포지션이 손절됐는가"라는 별개 관심사로, 17.1이 최우선 순위로 두는 이유도 "신규 스코어링과
-무관하게 항상 이긴다"는 것이다. 그래서 orchestrator(jobs/daily_decide.py)가 evaluate()
-호출 *전에* stop 체결 여부를 먼저 확인해 감지되면 STOP으로 단락 처리하고 이 함수를
-아예 호출하지 않는다 — 결과적으로 "STOP이 항상 이긴다"는 17.1 원칙이 더 단순하게
-보장된다(우선순위 합성 로직에 stop 조건을 추가로 끼워넣을 필요가 없어짐).
+무관하게 항상 이긴다"는 것이다. orchestrator(jobs/daily_decide.py)가 evaluate() 호출
+*전에* stop 체결 여부를 먼저 확인하지만, evaluate() 자체는 그와 무관하게 항상 정상
+호출된다 — STOP이 감지된 날도 그날의 indicators/pivots/cycle_daily/scores_daily가
+있어야 21장 리포트가 STOP 카드를 보여줄 수 있기 때문이다(스코어링을 생략하면 그
+기록 자체가 안 남는 버그가 있었음). 대신 orchestrator가 evaluate()의 반환값을 받은
+뒤 stop_triggered면 `action`만 STOP으로 덮어쓴다 — "STOP이 항상 이긴다"는 17.1
+원칙은 이 override 한 줄로 보장된다(우선순위 합성 로직에 stop 조건을 추가로
+끼워넣을 필요가 없어짐).
 """
 from __future__ import annotations
 
