@@ -96,6 +96,9 @@ def compute_rsi(close: pd.Series, period: int = 14, allowed_threshold: float = 2
     rsi_turn_up = rsi > rsi.shift(1)
     rsi_slope_3 = rolling_slope(rsi, 3)
     rsi_above_50 = rsi > 50.0
+    # RSI 자체의 signal선 — MACD와 같은 관례(오실레이터의 EMA9)를 그대로 따른다.
+    # 스코어링 로직은 안 쓴다(25/50 임계값과 turn_up만 사용) — 대시보드 표시 전용.
+    rsi_signal = ema(rsi, 9)
 
     return pd.DataFrame({
         "rsi14": rsi,
@@ -103,6 +106,7 @@ def compute_rsi(close: pd.Series, period: int = 14, allowed_threshold: float = 2
         "rsi_turn_up": rsi_turn_up,
         "rsi_slope_3": rsi_slope_3,
         "rsi_above_50": rsi_above_50,
+        "rsi_signal": rsi_signal,
     })
 
 

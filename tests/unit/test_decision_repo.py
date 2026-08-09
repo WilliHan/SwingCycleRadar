@@ -6,7 +6,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from swingcycle.domain.enums import Action, CycleState, Gate
+from swingcycle.domain.enums import Action, CycleState, EntryType, Gate
 from swingcycle.domain.models import Decision
 from swingcycle.repositories import decision_repo, trade_plan_repo
 from swingcycle.repositories.db import get_connection, run_migrations
@@ -81,6 +81,24 @@ class TestSaveAnalysisIdempotency:
         )
         row = conn.execute("SELECT action FROM scores_daily").fetchone()
         assert row["action"] == "ENTRY"
+
+    def test_stop_price_and_entry_type_persist(self, conn):
+        """리뷰에서 발견: scores_daily에 stop_price/entry_type 컬럼이 아예 없어서
+        DecisionEngine이 계산한 값이 저장 단계에서 조용히 버려지고, 대시보드는 항상
+        '제안 Stop: None'을 보여줬다 — 저장/조회 왕복이 값을 보존하는지 직접 확인."""
+        decision = Decision(
+            symbol="005930", name="삼성전자", friend_group="semiconductor", trade_date=date(2026, 1, 10),
+            cycle_state=CycleState.REVERSAL, reversal_core_score=82.0, adx_gate=Gate.PASS,
+            pullback_score=0.0, late_stage_score=0.0, action=Action.ENTRY,
+            reasons=["DOW_REVERSAL_CANDIDATE"], stop_price=94500.0, entry_type=EntryType.REVERSAL,
+        )
+        decision_repo.save_analysis(
+            conn, decision=decision, indicators_row=_indicators_row(),
+            pivots=_pivots(), dow_state="REVERSAL_CANDIDATE",
+        )
+        row = conn.execute("SELECT stop_price, entry_type FROM scores_daily").fetchone()
+        assert row["stop_price"] == pytest.approx(94500.0)
+        assert row["entry_type"] == "REVERSAL"
 
     def test_has_scores_row(self, conn):
         assert not decision_repo.has_scores_row(conn, "005930", date(2026, 1, 10))

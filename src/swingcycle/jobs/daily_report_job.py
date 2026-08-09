@@ -12,7 +12,7 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 
-from ..domain.enums import Action, CycleState, Gate
+from ..domain.enums import Action, CycleState, EntryType, Gate
 from ..domain.models import Decision
 from ..reports.daily_report import ReportCard
 from ..reports.storage import cleanup_old_reports, save_report
@@ -43,12 +43,30 @@ def _build_card(conn: sqlite3.Connection, row: sqlite3.Row, trade_date: date) ->
         adx_gate=Gate(row["adx_gate"]) if row["adx_gate"] else Gate.CAUTION,
         pullback_score=row["pullback_score"] or 0.0, late_stage_score=row["late_stage_score"] or 0.0,
         action=Action(row["action"]), reasons=json.loads(row["reasons_json"] or "[]"),
-        stop_price=None,
+        stop_price=row["stop_price"],
+        entry_type=EntryType(row["entry_type"]) if row["entry_type"] else None,
     )
 
     ind = conn.execute(
         "SELECT * FROM indicators_daily WHERE trade_date = ? AND symbol = ?",
         (trade_date.isoformat(), symbol),
+    ).fetchone()
+    # RSI/ADX "상승/하락" 표시는 전일 대비 단순 비교다 — indicators_daily에 별도
+    # rising/falling 컬럼을 새로 두지 않고, 직전 거래일 행 하나만 더 조회해서 그때그때
+    # 비교한다(대시보드 표시 전용이라 배치 스키마를 안 건드리는 쪽이 더 가볍다).
+    prev_ind = conn.execute(
+        "SELECT rsi14, adx14, macd, mdi14, pdi14 FROM indicators_daily WHERE symbol = ? AND trade_date < ? "
+        "ORDER BY trade_date DESC LIMIT 1",
+        (symbol, trade_date.isoformat()),
+    ).fetchone()
+
+    def _rising(key: str) -> bool | None:
+        if not (ind and prev_ind) or ind[key] is None or prev_ind[key] is None:
+            return None
+        return ind[key] > prev_ind[key]
+    close_row = conn.execute(
+        "SELECT close FROM daily_bars WHERE symbol = ? AND trade_date = ?",
+        (symbol, trade_date.isoformat()),
     ).fetchone()
 
     last_high = conn.execute(
@@ -77,6 +95,14 @@ def _build_card(conn: sqlite3.Connection, row: sqlite3.Row, trade_date: date) ->
         adx=(ind["adx14"] if ind else None) or 0.0,
         mdi=(ind["mdi14"] if ind else None) or 0.0,
         last_pivot_labels=pivot_labels,
+        pdi=(ind["pdi14"] if ind else None) or 0.0,
+        rsi_signal=(ind["rsi_signal"] if ind else None),
+        close_price=(close_row["close"] if close_row else None),
+        rsi_rising=_rising("rsi14"),
+        adx_rising=_rising("adx14"),
+        macd_rising=_rising("macd"),
+        mdi_rising=_rising("mdi14"),
+        pdi_rising=_rising("pdi14"),
     )
 
 

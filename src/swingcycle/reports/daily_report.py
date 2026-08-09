@@ -44,6 +44,15 @@ class ReportCard:
     adx: float
     mdi: float
     last_pivot_labels: dict[str, float] = field(default_factory=dict)  # {"HH":.., "HL":.., ...}
+    # 대시보드 상세 패널 표시 전용 보조 필드 — DecisionEngine/스코어링 어디서도 안 쓴다.
+    pdi: float | None = None
+    rsi_signal: float | None = None
+    close_price: float | None = None
+    rsi_rising: bool | None = None  # 전일 대비 RSI 상승 여부(None=전일 데이터 없음)
+    adx_rising: bool | None = None  # 전일 대비 ADX 상승 여부
+    macd_rising: bool | None = None  # 전일 대비 MACD 상승 여부
+    mdi_rising: bool | None = None  # 전일 대비 MDI(-DI) 상승 여부
+    pdi_rising: bool | None = None  # 전일 대비 PDI(+DI) 상승 여부
 
 
 def sort_decisions_for_report(cards: list[ReportCard]) -> list[ReportCard]:

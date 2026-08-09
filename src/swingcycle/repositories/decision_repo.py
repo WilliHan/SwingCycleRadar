@@ -103,17 +103,18 @@ def _upsert_indicators(conn: sqlite3.Connection, symbol: str, trade_date: date, 
             (trade_date, symbol, sma5, sma20, sma60, sma120, sma240, ema12, ema26,
              macd, macd_signal, macd_hist, rsi14, rsi_signal, pdi14, mdi14, adx14,
              vo10_20, ma5_distance_pct)
-        VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(trade_date, symbol) DO UPDATE SET
             sma5=excluded.sma5, sma20=excluded.sma20, sma60=excluded.sma60,
             sma120=excluded.sma120, sma240=excluded.sma240,
             macd=excluded.macd, macd_signal=excluded.macd_signal, macd_hist=excluded.macd_hist,
-            rsi14=excluded.rsi14, pdi14=excluded.pdi14, mdi14=excluded.mdi14, adx14=excluded.adx14,
+            rsi14=excluded.rsi14, rsi_signal=excluded.rsi_signal, pdi14=excluded.pdi14,
+            mdi14=excluded.mdi14, adx14=excluded.adx14,
             vo10_20=excluded.vo10_20, ma5_distance_pct=excluded.ma5_distance_pct
         """,
         (
             trade_date.isoformat(), symbol, g("sma5"), g("sma20"), g("sma60"), g("sma120"), g("sma240"),
-            g("macd"), g("macd_signal"), g("macd_histogram"), g("rsi14"),
+            g("macd"), g("macd_signal"), g("macd_histogram"), g("rsi14"), g("rsi_signal"),
             g("plus_di"), g("minus_di"), g("adx"), g("volume_oscillator"), g("ma5_distance_pct"),
         ),
     )
@@ -162,17 +163,19 @@ def _upsert_scores(conn: sqlite3.Connection, symbol: str, trade_date: date, deci
     conn.execute(
         """
         INSERT INTO scores_daily
-            (trade_date, symbol, reversal_core_score, adx_gate, pullback_score, late_stage_score, action, reasons_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (trade_date, symbol, reversal_core_score, adx_gate, pullback_score, late_stage_score, action, reasons_json, stop_price, entry_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(trade_date, symbol) DO UPDATE SET
             reversal_core_score=excluded.reversal_core_score, adx_gate=excluded.adx_gate,
             pullback_score=excluded.pullback_score, late_stage_score=excluded.late_stage_score,
-            action=excluded.action, reasons_json=excluded.reasons_json
+            action=excluded.action, reasons_json=excluded.reasons_json,
+            stop_price=excluded.stop_price, entry_type=excluded.entry_type
         """,
         (
             trade_date.isoformat(), symbol, decision.reversal_core_score, decision.adx_gate.value,
             decision.pullback_score, decision.late_stage_score, decision.action.value,
             json.dumps(decision.reasons, ensure_ascii=False),
+            decision.stop_price, decision.entry_type.value if decision.entry_type else None,
         ),
     )
 

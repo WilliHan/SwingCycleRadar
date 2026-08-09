@@ -7,6 +7,7 @@ Hub 게이트만으로 인증(MFTS 패턴, 4.3) — 앱 내부 로그인 폼 없
 """
 from __future__ import annotations
 
+import logging
 import sys
 from collections import Counter
 from datetime import date
@@ -28,15 +29,29 @@ from swingcycle.repositories.symbol_repo import has_active_trade_plan  # noqa: E
 
 st.set_page_config(page_title="SwingCycle Radar", page_icon="🧭", layout="wide")
 
+# cli.py(배치 진입점)와 달리 `streamlit run`은 별도 프로세스라 그쪽 basicConfig를
+# 안 탄다 — logging.info가 로그 파일에 안 찍히는 동일 부류 문제(세션 초반 cli.py에서도
+# 겪음)를 여기서도 막기 위해 직접 설정한다.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("webapp")
+
 _ACTION_COLOR = {
-    "STOP": "red", "EXIT": "red",
-    "ENTRY": "green",
-    "ADD": "blue",
-    "TAKE_PROFIT_PARTIAL": "violet",
+    # 한국 증시 관례(빨강=상승/매수, 파랑=하락/매도)를 그대로 따른다 — 매수쪽 행동
+    # 제안(ENTRY/ADD/TAKE_PROFIT_PARTIAL)은 빨강, 매도/위험관리쪽(STOP/EXIT)은 파랑.
+    "STOP": "blue", "EXIT": "blue",
+    "ENTRY": "red",
+    "ADD": "red",
+    "TAKE_PROFIT_PARTIAL": "red",
     "READY": "orange",
     "WAIT": "gray",
     "RESET": "gray",
 }
+_ACTION_EMOJI = {"red": "🔴", "blue": "🔵", "orange": "🟠", "gray": "⚪"}
+# 표 셀 색상은 pandas Styler로 시도했다가 되돌렸다 — Styler를 st.dataframe(on_select="rerun")에
+# 넘기면 리런마다 위젯이 다른 데이터로 인식돼 행 선택 상태가 깨지는 문제가 실사용에서
+# 확인됐다(사용자 캡처: 체크박스는 선택됐는데 상세 패널이 안 뜸). 그래서 색상 대신
+# 이모지 원(_ACTION_EMOJI)을 텍스트에 붙이는 방식으로 바꿨다 — TextColumn/선택 기능과
+# 충돌 없이 동일한 시각적 구분을 준다.
 
 _ACTION_HELP = {
     "STOP": "손절 체결됨 — 16.4에 따라 플랜 자동 종료",
@@ -55,13 +70,23 @@ _CYCLE_STATE_HELP = {
     "LATE_STAGE": "상승 후반부(분할익절 검토 구간)", "DOWNTREND_TRANSITION": "하락 전환 중",
 }
 _DOW_STATE_HELP = {
-    "DOWNTREND": "LH/LL 하락 구조", "REVERSAL_CANDIDATE": "하락추세 이탈 시작",
-    "UPTREND": "HH/HL 상승 구조", "RANGE": "박스권/구조 불명확",
+    "DOWNTREND": "LH/LL 하락 구조 (직전 2개 고점·저점 모두 LH/LL)",
+    "REVERSAL_CANDIDATE": (
+        "하락추세 이탈 시작 — 아직 상승추세 확정(HH+HL) 전 단계. 둘 중 하나만 걸려도 해당: "
+        "① 오늘 종가가 직전 LH(하락고점)를 상향 돌파, ② 확정 전 최근 저점이 직전 LL(하락저점)보다 "
+        "높게 형성 중 (②만 걸리면 아직 가격 반등 없이 저점만 다지는 중일 수 있음 — '반등'과는 다름)"
+    ),
+    "UPTREND": "HH/HL 상승 구조 (가장 최근 고점·저점이 HH/HL로 확정)",
+    "RANGE": "박스권/구조 불명확 (위 조건 어디에도 안 걸림)",
 }
 _ADX_GATE_HELP = {
-    "PASS": "추세 강도 조건 통과 — 진입에 우호적",
-    "CAUTION": "애매함 — 진입 자체는 막지 않되 신중히",
-    "BLOCK": "추세 강도가 진입에 불리 — 신규 진입 차단",
+    "PASS": (
+        "추세 강도 조건 통과 — 진입에 우호적. 아래 3가지 중 하나만 맞아도 PASS: "
+        "① MDI 하락 + ADX 고점에서 하락, ② MDI 하락 + ADX 기울기 완만(횡보), "
+        "③ MDI 하락 + ADX 저점 대비 상승전환 + 반전 핵심점수(Reversal) 이미 강세"
+    ),
+    "CAUTION": "애매함 — 진입 자체는 막지 않되 신중히 (PASS/BLOCK 어느 조건에도 안 걸리면 기본값)",
+    "BLOCK": "추세 강도가 진입에 불리 — 신규 진입 차단. MDI+ADX 동반 상승 또는 RSI 25 이하 또는 다우 하락추세에서 LH 미돌파 중 하나면 BLOCK",
 }
 
 _REASON_CODE_HELP: dict[str, str] = {
@@ -123,9 +148,10 @@ def _render_legend() -> None:
     with st.expander("📖 용어/범례 설명"):
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown("**Action (행동 제안)**")
+            st.markdown("**Action (행동 제안)** — 빨강=매수쪽(신규진입/추가/분할익절), 파랑=매도/위험관리쪽(손절/청산)")
             for k, v in _ACTION_HELP.items():
-                st.markdown(f"- `{k}` — {v}")
+                color = _ACTION_COLOR.get(k, "gray")
+                st.markdown(f"- :{color}[**`{k}`**] — {v}")
             st.markdown("**Cycle State (사이클 단계)**")
             for k, v in _CYCLE_STATE_HELP.items():
                 st.markdown(f"- `{k}` — {v}")
@@ -136,15 +162,42 @@ def _render_legend() -> None:
             for k, v in _ADX_GATE_HELP.items():
                 st.markdown(f"- `{k}` — {v}")
         with col2:
+            st.markdown("**점수 (0~100) — 각각 무엇을 재고, 어떻게 산정하는가**")
             st.markdown(
-                "**점수 (0~100)** — Reversal은 70(READY)/80(ENTRY), "
-                "Pullback은 65(READY)/75(ENTRY) 이상이면 후보. Late Stage는 "
-                "60 이상 분할익절 준비, 75 이상 분할익절 제안."
+                "- `Reversal(진입검토)` — 하락추세 이탈 후 반전 진입 신호 종합점수. "
+                "다우 구조 45점 + MACD 30점 + RSI 25점 = 100점 만점 합산. "
+                "단, RSI가 25 이하면 총점을 69점으로 강제 제한(ENTRY 80점 원천 차단). "
+                "70 이상=READY, 80 이상=ENTRY.\n"
+                "- `Pullback(재진입검토)` — 이미 확정된 상승추세(HH-HL) 내부 눌림목 재진입 신호 종합점수. "
+                "다우 35점 + MACD 20점 + RSI 20점 + ADX 15점 + 눌림목 품질 10점 = 100점 만점 합산. "
+                "65 이상=READY, 75 이상=ENTRY.\n"
+                "- `Late Stage(분할매도검토)` — 상승 후반부 과열/약세 다이버전스 감지 점수(분할익절 타이밍용, "
+                "전량매도 신호 아님). 약세 다이버전스 35점 + RSI 고점 연속 하락(2회 이상) 20점 + "
+                "가격 신고점인데 ADX는 고점에서 하락 15점 + MA5 이격 급팽창 20점 + 전고점/박스상단 근접 10점 = "
+                "최대 100점. 60 이상=분할익절 준비, 75 이상=분할익절 제안(TAKE_PROFIT_PARTIAL)."
+            )
+            st.markdown(
+                "**MACD/RSI/ADX 원시값은 어디서 보나** — 표는 요약 점수만 보여준다. "
+                "표 왼쪽 체크박스를 선택하면 아래 상세 패널에 MACD/Signal/0선 여부·RSI·ADX/MDI 실제 수치와 "
+                "최근 pivot, 전체 판단 근거(Reason Codes)가 표시된다."
             )
             st.markdown("**Reason Codes (판단 근거)**")
             for k, v in _REASON_CODE_HELP.items():
                 st.markdown(f"- `{k}` — {v}")
             st.caption("최근 pivot: HH=상승고점, HL=상승저점, LH=하락고점, LL=하락저점, EH/EL=직전과 동일가(중립)")
+
+
+def _signed_value(value: float) -> str:
+    """0선 기준 색상 — 한국 증시 관례(0선 위=빨강/상승, 0선 아래=파랑/하락)를 그대로 따른다."""
+    color = "red" if value > 0 else "blue"
+    return f":{color}[{value:,.2f}]"
+
+
+def _trend_arrow(rising: bool | None) -> str:
+    """전일 대비 상승/하락 화살표 — Action 색상과 같은 관례(빨강=상승, 파랑=하락)."""
+    if rising is None:
+        return ""
+    return " :red[↑]" if rising else " :blue[↓]"
 
 
 def _render_dashboard_card(card: ReportCard) -> None:
@@ -159,30 +212,47 @@ def _render_dashboard_card(card: ReportCard) -> None:
         with badge_col:
             st.markdown(f":{color}[**{d.action.value}**]")
 
-        st.caption(f"Cycle: {d.cycle_state.value} · Dow: {card.dow_state}")
+        cycle_help = _CYCLE_STATE_HELP.get(d.cycle_state.value, "")
+        dow_help = _DOW_STATE_HELP.get(card.dow_state, "")
+        st.caption(f"Cycle: {d.cycle_state.value}({cycle_help}) · Dow: {card.dow_state}({dow_help})")
 
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Reversal", f"{d.reversal_core_score:.0f}")
+        m1.metric("Reversal(진입검토)", f"{d.reversal_core_score:.0f}")
         m2.metric("ADX Gate", d.adx_gate.value)
-        m3.metric("Pullback", f"{d.pullback_score:.0f}")
-        m4.metric("Late Stage", f"{d.late_stage_score:.0f}")
+        m3.metric("Pullback(재진입검토)", f"{d.pullback_score:.0f}")
+        m4.metric("Late Stage(분할매도검토)", f"{d.late_stage_score:.0f}")
 
-        st.caption(
-            f"MACD {card.macd:.2f} / Signal {card.macd_signal:.2f} "
-            f"({'0선 위' if card.macd_above_zero else '0선 아래'}) · "
-            f"RSI {card.rsi14:.1f} (25:{'Y' if card.rsi_above_25 else 'N'} / 50:{'Y' if card.rsi_above_50 else 'N'}) · "
-            f"ADX {card.adx:.1f} / MDI {card.mdi:.1f}"
+        macd_cmp = ">" if card.macd > card.macd_signal else "<"
+        st.markdown(
+            f"MACD({_signed_value(card.macd)}) {macd_cmp} Signal({_signed_value(card.macd_signal)})"
+            f"{_trend_arrow(card.macd_rising)}"
+        )
+
+        rsi_line = f"RSI ({card.rsi14:.1f})"
+        if card.rsi_signal is not None:
+            rsi_cmp = ">" if card.rsi14 > card.rsi_signal else "<"
+            rsi_line += f" {rsi_cmp} Signal({card.rsi_signal:.1f})"
+        rsi_line += _trend_arrow(card.rsi_rising)
+        st.markdown(rsi_line)
+
+        mdi_pdi_cmp = ">" if card.mdi > (card.pdi or 0.0) else "<"
+        st.markdown(
+            f"ADX ({card.adx:.1f}){_trend_arrow(card.adx_rising)} "
+            f"(MDI {card.mdi:.1f}{_trend_arrow(card.mdi_rising)} {mdi_pdi_cmp} "
+            f"PDI {(card.pdi or 0.0):.1f}{_trend_arrow(card.pdi_rising)})"
         )
 
         if card.last_pivot_labels:
             pivots_str = "  ".join(f"{label}={price:,.0f}" for label, price in card.last_pivot_labels.items())
-            st.caption(f"최근 pivot: {pivots_str}")
+            price_prefix = f"(현재가 {card.close_price:,.0f}) " if card.close_price else ""
+            st.caption(f"{price_prefix}최근 pivot: {pivots_str}")
 
         if d.stop_price:
             st.caption(f"제안 Stop: {d.stop_price:,.0f}")
 
         if d.reasons:
-            st.caption(" · ".join(d.reasons))
+            reason_parts = [f"{r}({_REASON_CODE_HELP.get(r, '-')})" for r in d.reasons]
+            st.caption(" · ".join(reason_parts))
 
 
 def _build_summary_table(cards: list[ReportCard]) -> pd.DataFrame:
@@ -193,9 +263,10 @@ def _build_summary_table(cards: list[ReportCard]) -> pd.DataFrame:
     rows = []
     for c in cards:
         d = c.decision
+        emoji = _ACTION_EMOJI.get(_ACTION_COLOR.get(d.action.value, "gray"), "")
         rows.append({
             "종목명": d.name, "코드": d.symbol, "그룹": d.friend_group or "-",
-            "Action": d.action.value, "Cycle": d.cycle_state.value, "Dow": c.dow_state,
+            "Action": f"{emoji} {d.action.value}", "Cycle": d.cycle_state.value, "Dow": c.dow_state,
             "Reversal": d.reversal_core_score, "ADX Gate": d.adx_gate.value,
             "Pullback": d.pullback_score, "Late Stage": d.late_stage_score,
             "핵심근거": _summarize_reasons(d.reasons),
@@ -303,13 +374,17 @@ def render_dashboard() -> None:
     )
 
     selected_rows = event.selection.rows if event and event.selection else []
+    logger.info(
+        "[dashboard] date=%s row_count=%d selection_event=%s",
+        selected.isoformat(), len(table), dict(event.selection) if event and event.selection else None,
+    )
     if selected_rows:
         symbol = table.iloc[selected_rows[0]]["코드"]
         st.markdown("---")
         st.markdown(f"**상세 — {symbol}**")
         _render_dashboard_card(cards_by_symbol[symbol])
     else:
-        st.caption("표에서 행을 클릭하면 해당 종목의 상세(MACD/RSI/ADX/pivot/근거)가 아래에 표시됩니다.")
+        st.caption("표 왼쪽 체크박스를 선택하면 해당 종목의 상세(MACD/RSI/ADX/pivot/근거)가 아래에 표시됩니다.")
 
 
 def render_universe_management(identity) -> None:
