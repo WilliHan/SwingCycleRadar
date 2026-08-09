@@ -17,10 +17,13 @@ trade_plans/trade_events는 이 모듈이 직접 만들지 않는다 — ENTRY/A
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import date
 
 import pandas as pd
+
+_log = logging.getLogger("decision_repo")
 
 from ..domain.enums import CycleState
 from ..domain.models import Decision
@@ -64,8 +67,16 @@ def check_and_apply_stop(conn: sqlite3.Connection, *, symbol: str, trade_date: d
 
     fill_price = simulated_stop_fill(open_=float(bar["open"]), low=float(bar["low"]), stop=plan["stop_price"])
     if fill_price is None:
+        _log.debug(
+            "[decision_repo] symbol=%s stop 미체결 plan_id=%s stop_price=%.2f open=%.2f low=%.2f",
+            symbol, plan["plan_id"], plan["stop_price"], float(bar["open"]), float(bar["low"]),
+        )
         return False
 
+    _log.warning(
+        "[decision_repo] symbol=%s STOP 체결 plan_id=%s stop_price=%.2f fill_price=%.2f trade_date=%s",
+        symbol, plan["plan_id"], plan["stop_price"], fill_price, trade_date.isoformat(),
+    )
     apply_stop_and_reset(conn, plan_id=plan["plan_id"], trade_date=trade_date.isoformat(), fill_price=fill_price)
     return True
 

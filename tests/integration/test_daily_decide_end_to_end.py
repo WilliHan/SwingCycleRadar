@@ -113,6 +113,38 @@ class TestEndToEnd:
         assert result["status"] == "NO_TRADING_DAY"
         assert conn.execute("SELECT COUNT(*) FROM scores_daily").fetchone()[0] == 0
 
+    def test_stop_triggered_with_insufficient_bars_still_gets_a_report_row(self, conn):
+        """리뷰 지적 재현: 신규상장 등으로 bar 수가 _MIN_BARS_FOR_ANALYSIS(30) 미만이어도
+        STOP이 감지되면 scores_daily에 반드시 행이 남아야 한다(21장 리포트가 STOP 카드를
+        보여줘야 하므로) — 예전엔 이 gate가 STOP까지 걸러서 플랜만 닫히고 리포트 행이
+        안 남는 버그가 있었다."""
+        last_date = _seed_symbol_and_bars(conn, "005930", n_days=10, start_price=100.0, trend=-0.5)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM daily_bars WHERE symbol='005930'"
+        ).fetchone()[0] < 30  # 워밍업 기준 미만임을 전제로 확인
+
+        last_bar = conn.execute(
+            "SELECT low FROM daily_bars WHERE symbol='005930' AND trade_date = ?", (last_date.isoformat(),)
+        ).fetchone()
+        trade_plan_repo.create_plan(
+            conn, symbol="005930", created_date="2025-06-01", entry_type="REVERSAL",
+            stop_price=last_bar["low"] + 1000.0,
+        )
+        conn.commit()
+
+        result = run_decide(last_date)
+        assert result["stopped"] == 1
+        assert result["skipped_no_data"] == 0
+
+        row = conn.execute(
+            "SELECT action FROM scores_daily WHERE trade_date = ? AND symbol = '005930'", (last_date.isoformat(),)
+        ).fetchone()
+        assert row is not None, "STOP이 감지됐는데도 scores_daily 행이 없음 — 리포트에서 STOP 카드가 사라짐"
+        assert row["action"] == "STOP"
+
+        plan = conn.execute("SELECT status FROM trade_plans WHERE symbol='005930'").fetchone()
+        assert plan["status"] == "STOPPED"
+
     def test_stop_triggered_symbol_still_gets_a_report_row_with_stop_action(self, conn):
         last_date = _seed_symbol_and_bars(conn, "005930", n_days=60, start_price=100.0, trend=-0.5)
 

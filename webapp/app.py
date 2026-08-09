@@ -27,9 +27,9 @@ st.set_page_config(page_title="SwingCycle Radar", page_icon="🧭", layout="wide
 def render_dashboard() -> None:
     st.subheader("대시보드")
     st.info(
-        "일일 Decision Engine(scores_daily) 연동 예정 — 원 설계서 21장 카드 정렬"
-        "(STOP/EXIT → ENTRY → ADD → TAKE_PROFIT → READY → WAIT). "
-        "Sprint 4(Cycle/Scoring) 완료 후 이 탭에 실제 데이터를 연결한다."
+        "Decision Engine/배치(scores_daily)와 21장 카드 정렬 로직(STOP/EXIT → ENTRY → "
+        "ADD → TAKE_PROFIT_PARTIAL → READY → WAIT)은 이미 구현 완료(jobs/daily_decide.py, "
+        "reports/daily_report.py). scores_daily 기반 일일 판단 결과를 이 탭에 연결 예정."
     )
 
 
@@ -144,7 +144,10 @@ def _render_hard_delete_section(client, df: pd.DataFrame, identity) -> None:
 
 def render_backtest_placeholder() -> None:
     st.subheader("백테스트/검증")
-    st.info("원 설계서 22장 A/B/C 비교 결과 열람(읽기 전용) — Sprint 7 완료 후 연동 예정.")
+    st.info(
+        "A/B/C 비교 엔진(backtest/variants.py)은 구현 완료 — 이 탭은 결과 열람(읽기 전용) "
+        "UI 연결 예정."
+    )
 
 
 def main() -> None:

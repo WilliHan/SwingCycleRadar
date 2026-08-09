@@ -1,3 +1,4 @@
+import logging
 from datetime import date, datetime
 
 import typer
@@ -5,6 +6,16 @@ import typer
 from .jobs.daily_collect import run_collect
 from .jobs.daily_decide import run_decide
 from .jobs.daily_report_job import run_report
+from .settings import settings
+
+# 각 jobs/*.py는 logging.getLogger(...)만 만들고 basicConfig는 안 부른다 — 여기(실제
+# 프로세스 진입점)에서 한 번만 설정해야 한다. 안 하면 root logger 유효 레벨이 기본
+# WARNING으로 남아 logger.info()가 전부 조용히 씹힌다(MFGR hub_verify에서 실제로
+# 겪은 문제와 동일 패턴 — 2026-07-09 세션에서 발견/수정된 바 있음).
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 app = typer.Typer(help="SwingCycle Radar CLI")
 
