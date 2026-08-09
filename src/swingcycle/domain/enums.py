@@ -51,3 +51,14 @@ class EntryType(str, Enum):
 class DataSource(str, Enum):
     KRX_DIRECT = "KRX_DIRECT"
     PYKRX = "PYKRX"
+
+
+class AddSignal(str, Enum):
+    NONE = "NONE"
+    ADD_CONFIRM = "ADD_CONFIRM"
+
+
+class LateStageAction(str, Enum):
+    NONE = "NONE"
+    PREPARE_TAKE_PROFIT = "PREPARE_TAKE_PROFIT"
+    TAKE_PROFIT_PARTIAL = "TAKE_PROFIT_PARTIAL"

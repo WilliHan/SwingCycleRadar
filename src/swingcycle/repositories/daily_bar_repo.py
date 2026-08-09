@@ -1,7 +1,30 @@
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pandas as pd
+
+
+def fetch_bars(
+    conn: sqlite3.Connection, symbol: str, *, end_date: date | None = None, lookback: int | None = None,
+) -> pd.DataFrame:
+    """`symbol`의 일봉을 trade_date 오름차순으로 반환한다.
+
+    - `end_date`: 지정하면 그 날짜까지(포함)만 조회 — 지표는 계산 시점 이후 데이터를
+      절대 참조해서는 안 되므로(선행 참조 금지), 배치/백테스트 모두 반드시 이 파라미터로
+      "그 시점까지의 데이터"만 넘겨야 한다.
+    - `lookback`: 지정하면 (end_date 이전 포함) 최근 N개 행만 반환.
+    """
+    query = "SELECT trade_date, open, high, low, close, volume FROM daily_bars WHERE symbol = ?"
+    params: list = [symbol]
+    if end_date is not None:
+        query += " AND trade_date <= ?"
+        params.append(end_date.isoformat())
+    query += " ORDER BY trade_date ASC"
+
+    df = pd.read_sql_query(query, conn, params=params, parse_dates=["trade_date"])
+    if lookback is not None and len(df) > lookback:
+        df = df.iloc[-lookback:].reset_index(drop=True)
+    return df
 
 
 def upsert_daily_bars(conn: sqlite3.Connection, df: pd.DataFrame) -> int:

@@ -16,6 +16,8 @@ class Pivot:
     confirm_date: str
     dow_label: str  # "HH" | "LH" | "HL" | "LL" | "EH" | "EL"
     price: float
+    pivot_type: str | None = None   # "HIGH" | "LOW" — pivots.py가 채워서 넘김
+    pivot_date: str | None = None   # 실제 고점/저점이 발생한 날짜(확정일과 다름)
 
 
 @dataclass(frozen=True)
