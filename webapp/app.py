@@ -38,6 +38,88 @@ _ACTION_COLOR = {
     "RESET": "gray",
 }
 
+_ACTION_HELP = {
+    "STOP": "손절 체결됨 — 16.4에 따라 플랜 자동 종료",
+    "EXIT": "청산",
+    "ENTRY": "신규 진입 제안",
+    "ADD": "비중 확대 제안 (13장 — 시스템이 자동 주문하지 않음, 제안만)",
+    "TAKE_PROFIT_PARTIAL": "분할 익절 제안",
+    "READY": "관찰 — 조건 근접, 아직 진입 기준 미달",
+    "WAIT": "대기 — 뚜렷한 신호 없음",
+    "RESET": "손절 후 플랜 초기화(재진입 가능 상태)",
+}
+
+_CYCLE_STATE_HELP = {
+    "DOWNTREND": "하락추세", "BOTTOMING": "바닥 형성 중", "REVERSAL": "반전 국면",
+    "UPTREND": "상승추세", "PULLBACK": "상승 중 조정", "REACCELERATION": "조정 후 재가속",
+    "LATE_STAGE": "상승 후반부(분할익절 검토 구간)", "DOWNTREND_TRANSITION": "하락 전환 중",
+}
+_DOW_STATE_HELP = {
+    "DOWNTREND": "LH/LL 하락 구조", "REVERSAL_CANDIDATE": "하락추세 이탈 시작",
+    "UPTREND": "HH/HL 상승 구조", "RANGE": "박스권/구조 불명확",
+}
+_ADX_GATE_HELP = {
+    "PASS": "추세 강도 조건 통과 — 진입에 우호적",
+    "CAUTION": "애매함 — 진입 자체는 막지 않되 신중히",
+    "BLOCK": "추세 강도가 진입에 불리 — 신규 진입 차단",
+}
+
+_REASON_CODE_HELP: dict[str, str] = {
+    "DOW_DOWNTREND": "다우 구조 하락추세 확인",
+    "DOW_REVERSAL_CANDIDATE": "하락추세 이탈 시작(다우 반전 후보)",
+    "DOW_LAST_LH_BROKEN": "직전 LH(하락고점) 돌파",
+    "DOW_HL_CONFIRMED": "HL(상승저점) 구조 형성/유지",
+    "DOW_HH_CONFIRMED": "HH(상승고점) 구조 확정",
+    "MACD_ABOVE_SIGNAL": "MACD가 시그널선 상회",
+    "MACD_ABOVE_ZERO": "MACD가 0선 상회",
+    "MACD_CROSS_UP_RECENT": "최근 MACD 골든크로스 발생",
+    "RSI_ABOVE_25": "RSI 25 초과(진입 최소 조건)",
+    "RSI_BELOW_25_BLOCK": "RSI 25 미만 — 점수 상한 제한/진입 차단",
+    "RSI_ABOVE_50": "RSI 50 초과(상승 모멘텀 우위)",
+    "RSI_TURN_UP": "RSI 상승 전환",
+    "ADX_ABOVE_30": "ADX 30 이상(강한 추세)",
+    "ADX_FALLING_FROM_HIGH": "ADX가 고점에서 하락 중(추세 약화)",
+    "ADX_FLATTENING": "ADX 기울기 완만해짐",
+    "ADX_TURN_UP": "ADX 저점 대비 상승 전환",
+    "MDI_FALLING": "-DI(하락압력) 하락 중",
+    "MDI_RISING_BLOCK": "-DI 상승 + ADX 상승 — 하락 방향성 강화(진입 차단)",
+    "PULLBACK_HL_HOLD": "눌림 저점이 기존 HL 미훼손",
+    "LATE_BEARISH_DIVERGENCE": "가격 HH인데 RSI는 LH — 약세 다이버전스",
+    "LATE_MA5_ACCELERATION": "5일선 이격 급팽창(고점권 과열 신호)",
+    "CYCLE_HH_HL_CONFIRMED": "HH+HL 확정 — 상승추세 진입",
+    "CYCLE_PULLBACK_STARTED": "고점 이후 조정 시작",
+    "CYCLE_LH_CANDIDATE": "LH(하락고점) 후보 발생",
+    "CYCLE_HL_BREACHED": "주요 HL(상승저점) 훼손",
+}
+
+
+def _render_legend() -> None:
+    with st.expander("📖 용어/범례 설명"):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Action (행동 제안)**")
+            for k, v in _ACTION_HELP.items():
+                st.markdown(f"- `{k}` — {v}")
+            st.markdown("**Cycle State (사이클 단계)**")
+            for k, v in _CYCLE_STATE_HELP.items():
+                st.markdown(f"- `{k}` — {v}")
+            st.markdown("**Dow State (다우 구조)**")
+            for k, v in _DOW_STATE_HELP.items():
+                st.markdown(f"- `{k}` — {v}")
+            st.markdown("**ADX Gate (추세 강도 필터)**")
+            for k, v in _ADX_GATE_HELP.items():
+                st.markdown(f"- `{k}` — {v}")
+        with col2:
+            st.markdown(
+                "**점수 (0~100)** — Reversal은 70(READY)/80(ENTRY), "
+                "Pullback은 65(READY)/75(ENTRY) 이상이면 후보. Late Stage는 "
+                "60 이상 분할익절 준비, 75 이상 분할익절 제안."
+            )
+            st.markdown("**Reason Codes (판단 근거)**")
+            for k, v in _REASON_CODE_HELP.items():
+                st.markdown(f"- `{k}` — {v}")
+            st.caption("최근 pivot: HH=상승고점, HL=상승저점, LH=하락고점, LL=하락저점, EH/EL=직전과 동일가(중립)")
+
 
 def _render_dashboard_card(card: ReportCard) -> None:
     d = card.decision
@@ -77,8 +159,41 @@ def _render_dashboard_card(card: ReportCard) -> None:
             st.caption(" · ".join(d.reasons))
 
 
+def _build_summary_table(cards: list[ReportCard]) -> pd.DataFrame:
+    """표 형태 기본 뷰용 — 카드 전부를 한 눈에 스캔/정렬하기 위한 핵심 컬럼만 추림.
+    MACD/RSI/ADX 원시값·pivot·reason codes 같은 상세 정보는 표에 넣으면 오히려
+    가독성이 떨어져서 뺐다 — 행 선택 시 아래 상세 패널(_render_dashboard_card)에서 보여준다."""
+    rows = []
+    for c in cards:
+        d = c.decision
+        rows.append({
+            "종목명": d.name, "코드": d.symbol, "그룹": d.friend_group or "-",
+            "Action": d.action.value, "Cycle": d.cycle_state.value, "Dow": c.dow_state,
+            "Reversal": d.reversal_core_score, "ADX Gate": d.adx_gate.value,
+            "Pullback": d.pullback_score, "Late Stage": d.late_stage_score,
+            "제안 Stop": d.stop_price,
+        })
+    return pd.DataFrame(rows)
+
+
+_TABLE_COLUMN_CONFIG = {
+    "종목명": st.column_config.TextColumn(width="small"),
+    "코드": st.column_config.TextColumn(width="small"),
+    "그룹": st.column_config.TextColumn(width="small"),
+    "Action": st.column_config.TextColumn(help="행동 제안 — 위 범례의 Action 항목 참고", width="small"),
+    "Cycle": st.column_config.TextColumn(help="사이클 단계 — 위 범례의 Cycle State 항목 참고", width="small"),
+    "Dow": st.column_config.TextColumn(help="다우 구조 — 위 범례의 Dow State 항목 참고", width="small"),
+    "Reversal": st.column_config.ProgressColumn(help="Reversal Entry 점수(0~100). 70=READY, 80=ENTRY 임계값", min_value=0, max_value=100, format="%.0f"),
+    "ADX Gate": st.column_config.TextColumn(help="추세 강도 필터 — 위 범례의 ADX Gate 항목 참고", width="small"),
+    "Pullback": st.column_config.ProgressColumn(help="Pullback Entry 점수(0~100). 65=READY, 75=ENTRY 임계값", min_value=0, max_value=100, format="%.0f"),
+    "Late Stage": st.column_config.ProgressColumn(help="Late Stage/약세 다이버전스 점수(0~100). 60=준비, 75=분할익절 제안", min_value=0, max_value=100, format="%.0f"),
+    "제안 Stop": st.column_config.NumberColumn(help="16장 — 최근 confirmed pivot low 기준 제안 손절가", format="%.0f"),
+}
+
+
 def render_dashboard() -> None:
     st.subheader("대시보드")
+    _render_legend()
 
     # jobs/*.py는 전부 get_connection() 전에 run_migrations()를 부른다 — 여기서 빠뜨리면
     # 배치를 한 번도 안 돌린 새 배포/새 DB 파일에서 "no such table: scores_daily"로
@@ -105,13 +220,31 @@ def render_dashboard() -> None:
         return
 
     cards = sort_decisions_for_report(cards)  # 21장: STOP/EXIT → ENTRY → ADD → TAKE_PROFIT_PARTIAL → READY → WAIT
+    cards_by_symbol = {c.decision.symbol: c for c in cards}
 
     counts = Counter(c.decision.action.value for c in cards)
     summary = " · ".join(f"{action} {n}" for action, n in counts.items())
     st.caption(f"{selected.isoformat()} 기준 {len(cards)}개 종목 — {summary}")
 
-    for card in cards:
-        _render_dashboard_card(card)
+    table = _build_summary_table(cards)
+    event = st.dataframe(
+        table,
+        column_config=_TABLE_COLUMN_CONFIG,
+        hide_index=True,
+        use_container_width=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="dashboard_table",
+    )
+
+    selected_rows = event.selection.rows if event and event.selection else []
+    if selected_rows:
+        symbol = table.iloc[selected_rows[0]]["코드"]
+        st.markdown("---")
+        st.markdown(f"**상세 — {symbol}**")
+        _render_dashboard_card(cards_by_symbol[symbol])
+    else:
+        st.caption("표에서 행을 클릭하면 해당 종목의 상세(MACD/RSI/ADX/pivot/근거)가 아래에 표시됩니다.")
 
 
 def render_universe_management(identity) -> None:
