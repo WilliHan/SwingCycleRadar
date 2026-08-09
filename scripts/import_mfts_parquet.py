@@ -21,26 +21,9 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from swingcycle.domain.enums import DataSource  # noqa: E402
+from swingcycle.jobs.daily_collect_from_parquet import load_symbol_parquet  # noqa: E402
 from swingcycle.repositories import daily_bar_repo  # noqa: E402
 from swingcycle.repositories.db import get_connection, run_migrations  # noqa: E402
-
-
-def _load_symbol_parquet(path: Path) -> pd.DataFrame:
-    symbol = path.stem
-    raw = pd.read_parquet(path)
-    raw = raw.reset_index()
-    date_col = raw.columns[0]  # 인덱스가 "날짜"였던 컬럼 — reset_index 후 첫 컬럼
-    raw = raw.rename(columns={date_col: "trade_date", "amount_krw": "trade_value"})
-    raw["trade_date"] = pd.to_datetime(raw["trade_date"]).dt.strftime("%Y-%m-%d")
-    raw["symbol"] = symbol
-    raw["market_cap"] = None
-    raw["source"] = DataSource.MFTS_PARQUET.value
-    raw["source_raw_hash"] = None
-    return raw[[
-        "trade_date", "symbol", "open", "high", "low", "close", "volume",
-        "trade_value", "market_cap", "source", "source_raw_hash",
-    ]]
 
 
 def main(parquet_dir: str) -> None:
@@ -54,7 +37,7 @@ def main(parquet_dir: str) -> None:
 
         total_rows = 0
         for path in files:
-            df = _load_symbol_parquet(path)
+            df = load_symbol_parquet(path)
             n = daily_bar_repo.upsert_daily_bars(conn, df)
             conn.commit()
             total_rows += n

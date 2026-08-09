@@ -4,6 +4,7 @@ from datetime import date, datetime
 import typer
 
 from .jobs.daily_collect import run_collect
+from .jobs.daily_collect_from_parquet import run_collect_from_parquet
 from .jobs.daily_decide import run_decide
 from .jobs.daily_report_job import run_report
 from .settings import settings
@@ -28,6 +29,17 @@ def _parse_date(value: str) -> date:
 def collect(date_: str = typer.Option(..., "--date", help="YYYY-MM-DD")) -> None:
     """설계서 20.1 1단계: KRX/pykrx 수집."""
     result = run_collect(_parse_date(date_))
+    typer.echo(result)
+
+
+@app.command("collect-parquet")
+def collect_parquet(
+    date_: str = typer.Option(..., "--date", help="YYYY-MM-DD"),
+    parquet_dir: str = typer.Option(..., "--parquet-dir", help="MFTS @RUN/cache/parquet 경로"),
+) -> None:
+    """collect의 대안: KRX 대신 MFTS가 이미 수집해둔 로컬 parquet 캐시를 읽는다
+    (같은 서버에 배포된 경우 전용 — Oracle 새벽 배치가 이 커맨드를 쓴다)."""
+    result = run_collect_from_parquet(_parse_date(date_), parquet_dir)
     typer.echo(result)
 
 

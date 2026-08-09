@@ -7,6 +7,7 @@ Hub 게이트만으로 인증(MFTS 패턴, 4.3) — 앱 내부 로그인 폼 없
 """
 from __future__ import annotations
 
+import io
 import logging
 import sys
 from collections import Counter
@@ -363,6 +364,18 @@ def render_dashboard() -> None:
         return
 
     table = _build_summary_table(cards)
+
+    excel_buf = io.BytesIO()
+    with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
+        table.to_excel(writer, index=False, sheet_name="dashboard")
+    st.download_button(
+        "엑셀 저장",
+        data=excel_buf.getvalue(),
+        file_name=f"swingcycle_dashboard_{selected.isoformat()}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="dashboard_excel_download",
+    )
+
     event = st.dataframe(
         table,
         column_config=_TABLE_COLUMN_CONFIG,
