@@ -7,3 +7,6 @@ http:
 
 backfill:
   min_lookback_days: 350
+
+reports:
+  retention_days: 90  # data/exports/{trade_date}/ 보존 기간 — 이보다 오래된 건 자동 삭제
