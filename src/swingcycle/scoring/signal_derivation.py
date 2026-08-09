@@ -34,6 +34,8 @@ class DerivationConfig:
     late_stage_ma5_z_min: float = 1.5
     rsi_lh_streak_min_for_accumulating: int = 2
     near_prior_high_pct: float = 2.0  # 전고점 대비 이 % 이내면 "근접"
+    rsi_support_band: float = 3.0     # RSI가 50 "부근"으로 볼 밴드 폭 (47~53)
+    rsi_support_lookback: int = 5     # 이 기간(오늘 포함) 내 50 부근 접촉 여부를 확인
 
 
 def _unconfirmed_low_price(ctx: DailyContext, right_bars: int) -> float | None:
@@ -43,6 +45,16 @@ def _unconfirmed_low_price(ctx: DailyContext, right_bars: int) -> float | None:
     if tail.empty:
         return None
     return float(tail.min())
+
+
+def _rsi_touched_50_support_recently(ctx: DailyContext, band: float, lookback: int) -> bool:
+    """최근 `lookback`일(오늘 포함) 중 RSI가 50 부근(|RSI-50| <= band)을 찍은 적이 있는지.
+    "50 부근 지지 후 재상승"(14.1)의 "지지" 부분 — rsi_turn_up과 AND로 묶어야
+    "재상승"까지 포함된 온전한 조건이 된다(derive_pullback_signals에서 결합)."""
+    window = ctx.indicators["rsi14"].iloc[-lookback:]
+    if window.empty:
+        return False
+    return bool((window.sub(50.0).abs() <= band).any())
 
 
 def _pivot_high_observations(ctx: DailyContext) -> list[PivotHighObservation]:
@@ -202,7 +214,12 @@ def derive_pullback_signals(
     )
     rsi = PullbackRsiSignals(
         above_50=bool(ind["rsi_above_50"]),
-        support_then_rebound=bool(ind["rsi_turn_up"]),  # 근사
+        # "50 부근 지지"(최근 lookback일 내 |RSI-50|<=band) + "재상승"(오늘 rsi_turn_up)을
+        # 둘 다 명시적으로 확인한다 — 이전엔 rsi_turn_up 단독이라 50 근처가 아니어도
+        # (예: RSI 70에서 살짝 더 올라도) 참이 되는 오탐이 있었다.
+        support_then_rebound=bool(ind["rsi_turn_up"]) and _rsi_touched_50_support_recently(
+            ctx, cfg.rsi_support_band, cfg.rsi_support_lookback,
+        ),
     )
     adx = PullbackAdxSignals(
         strong=bool(ind["adx"] >= cfg.pullback_adx_min),
