@@ -91,6 +91,26 @@ class TestSaveAnalysisIdempotency:
         assert decision_repo.has_scores_row(conn, "005930", date(2026, 1, 10))
 
 
+class TestGetLatestTradeDate:
+    def test_none_when_no_data(self, conn):
+        assert decision_repo.get_latest_trade_date(conn) is None
+
+    def test_returns_the_max_date(self, conn):
+        decision_repo.save_analysis(
+            conn, decision=_decision(trade_date=date(2026, 1, 5)), indicators_row=_indicators_row(),
+            pivots=_pivots(), dow_state="REVERSAL_CANDIDATE",
+        )
+        decision_repo.save_analysis(
+            conn, decision=_decision(trade_date=date(2026, 1, 10)), indicators_row=_indicators_row(),
+            pivots=_pivots(), dow_state="REVERSAL_CANDIDATE",
+        )
+        decision_repo.save_analysis(
+            conn, decision=_decision(trade_date=date(2026, 1, 3)), indicators_row=_indicators_row(),
+            pivots=_pivots(), dow_state="REVERSAL_CANDIDATE",
+        )
+        assert decision_repo.get_latest_trade_date(conn) == date(2026, 1, 10)
+
+
 class TestCheckAndApplyStop:
     def test_no_active_plan_returns_false(self, conn):
         bar = pd.Series({"open": 100.0, "low": 90.0})

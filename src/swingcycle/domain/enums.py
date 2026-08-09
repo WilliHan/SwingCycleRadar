@@ -51,6 +51,7 @@ class EntryType(str, Enum):
 class DataSource(str, Enum):
     KRX_DIRECT = "KRX_DIRECT"
     PYKRX = "PYKRX"
+    MFTS_PARQUET = "MFTS_PARQUET"  # MFTS @RUN/cache/parquet/{symbol}.parquet 1회성 임포트(출처 추적용)
 
 
 class AddSignal(str, Enum):

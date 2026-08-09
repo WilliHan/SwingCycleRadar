@@ -8,6 +8,8 @@ Hub 게이트만으로 인증(MFTS 패턴, 4.3) — 앱 내부 로그인 폼 없
 from __future__ import annotations
 
 import sys
+from collections import Counter
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -18,19 +20,98 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from common.hub_bridge import resolve_hub_identity  # noqa: E402
 from swingcycle.data.supabase_client import get_supabase_client  # noqa: E402
-from swingcycle.repositories.db import get_connection  # noqa: E402
+from swingcycle.jobs.daily_report_job import get_report_cards  # noqa: E402
+from swingcycle.reports.daily_report import ReportCard, sort_decisions_for_report  # noqa: E402
+from swingcycle.repositories import decision_repo  # noqa: E402
+from swingcycle.repositories.db import get_connection, run_migrations  # noqa: E402
 from swingcycle.repositories.symbol_repo import has_active_trade_plan  # noqa: E402
 
 st.set_page_config(page_title="SwingCycle Radar", page_icon="🧭", layout="wide")
 
+_ACTION_COLOR = {
+    "STOP": "red", "EXIT": "red",
+    "ENTRY": "green",
+    "ADD": "blue",
+    "TAKE_PROFIT_PARTIAL": "violet",
+    "READY": "orange",
+    "WAIT": "gray",
+    "RESET": "gray",
+}
+
+
+def _render_dashboard_card(card: ReportCard) -> None:
+    d = card.decision
+    color = _ACTION_COLOR.get(d.action.value, "gray")
+
+    with st.container(border=True):
+        header_col, badge_col = st.columns([4, 1])
+        with header_col:
+            group = f" · {d.friend_group}" if d.friend_group else ""
+            st.markdown(f"**{d.name}** ({d.symbol}){group}")
+        with badge_col:
+            st.markdown(f":{color}[**{d.action.value}**]")
+
+        st.caption(f"Cycle: {d.cycle_state.value} · Dow: {card.dow_state}")
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Reversal", f"{d.reversal_core_score:.0f}")
+        m2.metric("ADX Gate", d.adx_gate.value)
+        m3.metric("Pullback", f"{d.pullback_score:.0f}")
+        m4.metric("Late Stage", f"{d.late_stage_score:.0f}")
+
+        st.caption(
+            f"MACD {card.macd:.2f} / Signal {card.macd_signal:.2f} "
+            f"({'0선 위' if card.macd_above_zero else '0선 아래'}) · "
+            f"RSI {card.rsi14:.1f} (25:{'Y' if card.rsi_above_25 else 'N'} / 50:{'Y' if card.rsi_above_50 else 'N'}) · "
+            f"ADX {card.adx:.1f} / MDI {card.mdi:.1f}"
+        )
+
+        if card.last_pivot_labels:
+            pivots_str = "  ".join(f"{label}={price:,.0f}" for label, price in card.last_pivot_labels.items())
+            st.caption(f"최근 pivot: {pivots_str}")
+
+        if d.stop_price:
+            st.caption(f"제안 Stop: {d.stop_price:,.0f}")
+
+        if d.reasons:
+            st.caption(" · ".join(d.reasons))
+
 
 def render_dashboard() -> None:
     st.subheader("대시보드")
-    st.info(
-        "Decision Engine/배치(scores_daily)와 21장 카드 정렬 로직(STOP/EXIT → ENTRY → "
-        "ADD → TAKE_PROFIT_PARTIAL → READY → WAIT)은 이미 구현 완료(jobs/daily_decide.py, "
-        "reports/daily_report.py). scores_daily 기반 일일 판단 결과를 이 탭에 연결 예정."
-    )
+
+    # jobs/*.py는 전부 get_connection() 전에 run_migrations()를 부른다 — 여기서 빠뜨리면
+    # 배치를 한 번도 안 돌린 새 배포/새 DB 파일에서 "no such table: scores_daily"로
+    # 대시보드 자체가 크래시한다(실제로 이 세션에서 겪은 버그 — SCR을 먼저 띄우고
+    # 나중에 CLI로 collect/decide를 처음 돌렸더니 그 사이에 대시보드가 이 예외로 죽었음).
+    run_migrations()
+    conn = get_connection()
+    try:
+        latest = decision_repo.get_latest_trade_date(conn)
+        if latest is None:
+            st.info(
+                "아직 판정 결과가 없습니다 — 배치(`swingcycle decide --date YYYY-MM-DD`)가 "
+                "한 번도 실행되지 않았거나 종목 유니버스가 비어 있습니다."
+            )
+            return
+
+        selected = st.date_input("조회 날짜", value=latest, max_value=date.today())
+        cards = get_report_cards(conn, selected)
+    finally:
+        conn.close()
+
+    if not cards:
+        st.warning(f"{selected.isoformat()} 판정 결과가 없습니다 (배치 미실행 또는 휴장일).")
+        return
+
+    cards = sort_decisions_for_report(cards)  # 21장: STOP/EXIT → ENTRY → ADD → TAKE_PROFIT_PARTIAL → READY → WAIT
+
+    counts = Counter(c.decision.action.value for c in cards)
+    summary = " · ".join(f"{action} {n}" for action, n in counts.items())
+    st.caption(f"{selected.isoformat()} 기준 {len(cards)}개 종목 — {summary}")
+
+    for card in cards:
+        _render_dashboard_card(card)
 
 
 def render_universe_management(identity) -> None:

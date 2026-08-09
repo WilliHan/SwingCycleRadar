@@ -80,15 +80,22 @@ def _build_card(conn: sqlite3.Connection, row: sqlite3.Row, trade_date: date) ->
     )
 
 
+def get_report_cards(conn: sqlite3.Connection, trade_date: date) -> list[ReportCard]:
+    """`trade_date`의 scores_daily 행 전체를 21장 카드로 조립한다. run_report()(파일 저장)와
+    webapp 대시보드(실시간 표시)가 이 함수 하나를 공유한다 — DB 조회/조립 로직을
+    두 곳에 중복시키지 않기 위함."""
+    rows = conn.execute("SELECT * FROM scores_daily WHERE trade_date = ?", (trade_date.isoformat(),)).fetchall()
+    return [_build_card(conn, row, trade_date) for row in rows]
+
+
 def run_report(trade_date: date, retention_days: int | None = None, base_dir: Path | None = None) -> dict:
     run_migrations()
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT * FROM scores_daily WHERE trade_date = ?", (trade_date.isoformat(),)).fetchall()
-        if not rows:
+        cards = get_report_cards(conn, trade_date)
+        if not cards:
             return {"status": "NO_DECISIONS", "trade_date": trade_date.isoformat()}
 
-        cards = [_build_card(conn, row, trade_date) for row in rows]
         paths = save_report(cards, trade_date, base_dir=base_dir)
 
         retention = retention_days if retention_days is not None else load_yaml_config("app.yml").get("reports", {}).get("retention_days", 90)

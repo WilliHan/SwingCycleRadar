@@ -9,8 +9,8 @@ import pandas as pd
 import pytest
 
 from swingcycle.jobs.daily_decide import run_decide
-from swingcycle.jobs.daily_report_job import run_report
-from swingcycle.repositories import daily_bar_repo
+from swingcycle.jobs.daily_report_job import get_report_cards, run_report
+from swingcycle.repositories import daily_bar_repo, decision_repo
 from swingcycle.repositories.db import get_connection, run_migrations
 from swingcycle.settings import settings
 
@@ -86,3 +86,20 @@ def test_report_rerun_does_not_duplicate_cards(conn, tmp_path):
     assert result["card_count"] == 1
     files = list((report_out / last_date.isoformat()).iterdir())
     assert len(files) == 3  # html/csv/json, 늘지 않음
+
+
+def test_get_report_cards_used_by_webapp_dashboard(conn):
+    """run_report()(파일 저장)와 webapp 대시보드(실시간 표시)가 공유하는 조립 함수 자체를
+    직접 검증 — DB 조회/조립 로직이 두 곳에서 결과가 갈리지 않는지 확인."""
+    last_date = _seed_symbol_and_bars(conn, "005930", n_days=60)
+    run_decide(last_date)
+
+    cards = get_report_cards(conn, last_date)
+    assert len(cards) == 1
+    assert cards[0].decision.symbol == "005930"
+    assert decision_repo.get_latest_trade_date(conn) == last_date
+
+
+def test_get_report_cards_empty_for_date_without_decisions(conn):
+    last_date = _seed_symbol_and_bars(conn, "005930", n_days=60)
+    assert get_report_cards(conn, last_date) == []

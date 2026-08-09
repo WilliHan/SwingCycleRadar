@@ -42,6 +42,15 @@ def has_scores_row(conn: sqlite3.Connection, symbol: str, trade_date: date) -> b
     return row is not None
 
 
+def get_latest_trade_date(conn: sqlite3.Connection) -> date | None:
+    """scores_daily에 판정 결과가 존재하는 가장 최근 날짜. 배치가 아직 한 번도 안
+    돌았으면 None — 호출부(webapp 대시보드 등)가 "아직 데이터 없음"으로 처리해야 한다."""
+    row = conn.execute("SELECT MAX(trade_date) AS latest FROM scores_daily").fetchone()
+    if row is None or row["latest"] is None:
+        return None
+    return date.fromisoformat(row["latest"])
+
+
 def get_prior_cycle_state(conn: sqlite3.Connection, symbol: str, trade_date: date) -> CycleState:
     """`trade_date` 이전 가장 최근 cycle_daily 행의 cycle_state. 없으면(신규 종목/첫 실행)
     콜드스타트 기본값 DOWNTREND — state machine이 가장 보수적으로 시작하도록(RANGE 대신
