@@ -92,6 +92,32 @@ _REASON_CODE_HELP: dict[str, str] = {
     "CYCLE_HL_BREACHED": "주요 HL(상승저점) 훼손",
 }
 
+_REASON_CODE_SHORT: dict[str, str] = {
+    "DOW_DOWNTREND": "하락구조", "DOW_REVERSAL_CANDIDATE": "반전후보",
+    "DOW_LAST_LH_BROKEN": "LH돌파", "DOW_HL_CONFIRMED": "HL형성", "DOW_HH_CONFIRMED": "HH확정",
+    "MACD_ABOVE_SIGNAL": "MACD+", "MACD_ABOVE_ZERO": "MACD0선+", "MACD_CROSS_UP_RECENT": "MACD GC",
+    "RSI_ABOVE_25": "RSI25+", "RSI_BELOW_25_BLOCK": "RSI25↓차단", "RSI_ABOVE_50": "RSI50+", "RSI_TURN_UP": "RSI반등",
+    "ADX_ABOVE_30": "ADX30+", "ADX_FALLING_FROM_HIGH": "ADX하락", "ADX_FLATTENING": "ADX완만", "ADX_TURN_UP": "ADX반등",
+    "MDI_FALLING": "MDI하락", "MDI_RISING_BLOCK": "MDI↑차단",
+    "PULLBACK_HL_HOLD": "HL유지",
+    "LATE_BEARISH_DIVERGENCE": "약세다이버전스", "LATE_MA5_ACCELERATION": "MA5과열",
+    "CYCLE_HH_HL_CONFIRMED": "HH+HL확정", "CYCLE_PULLBACK_STARTED": "조정시작",
+    "CYCLE_LH_CANDIDATE": "LH후보", "CYCLE_HL_BREACHED": "HL훼손",
+}
+
+
+def _summarize_reasons(reasons: list[str], max_items: int = 2) -> str:
+    """표 보조 컬럼용 — reason code 전체 목록(상세 패널에서 봄) 대신 앞 2개만 짧은
+    라벨로 요약. 그 이상은 "+N"으로 남은 개수만 표시(표 셀 가독성 우선)."""
+    if not reasons:
+        return "-"
+    labels = [_REASON_CODE_SHORT.get(r, r) for r in reasons[:max_items]]
+    text = " · ".join(labels)
+    remaining = len(reasons) - max_items
+    if remaining > 0:
+        text += f" 외 {remaining}"
+    return text
+
 
 def _render_legend() -> None:
     with st.expander("📖 용어/범례 설명"):
@@ -161,8 +187,9 @@ def _render_dashboard_card(card: ReportCard) -> None:
 
 def _build_summary_table(cards: list[ReportCard]) -> pd.DataFrame:
     """표 형태 기본 뷰용 — 카드 전부를 한 눈에 스캔/정렬하기 위한 핵심 컬럼만 추림.
-    MACD/RSI/ADX 원시값·pivot·reason codes 같은 상세 정보는 표에 넣으면 오히려
-    가독성이 떨어져서 뺐다 — 행 선택 시 아래 상세 패널(_render_dashboard_card)에서 보여준다."""
+    MACD/RSI/ADX 원시값·pivot 같은 상세 정보는 표에 넣으면 오히려 가독성이 떨어져서
+    뺐다 — 행 선택 시 아래 상세 패널(_render_dashboard_card)에서 보여준다. Reason code는
+    전체 목록 대신 _summarize_reasons()로 요약한 "핵심근거" 보조 컬럼 하나만 둔다."""
     rows = []
     for c in cards:
         d = c.decision
@@ -171,6 +198,7 @@ def _build_summary_table(cards: list[ReportCard]) -> pd.DataFrame:
             "Action": d.action.value, "Cycle": d.cycle_state.value, "Dow": c.dow_state,
             "Reversal": d.reversal_core_score, "ADX Gate": d.adx_gate.value,
             "Pullback": d.pullback_score, "Late Stage": d.late_stage_score,
+            "핵심근거": _summarize_reasons(d.reasons),
             "제안 Stop": d.stop_price,
         })
     return pd.DataFrame(rows)
@@ -187,7 +215,15 @@ _TABLE_COLUMN_CONFIG = {
     "ADX Gate": st.column_config.TextColumn(help="추세 강도 필터 — 위 범례의 ADX Gate 항목 참고", width="small"),
     "Pullback": st.column_config.ProgressColumn(help="Pullback Entry 점수(0~100). 65=READY, 75=ENTRY 임계값", min_value=0, max_value=100, format="%.0f"),
     "Late Stage": st.column_config.ProgressColumn(help="Late Stage/약세 다이버전스 점수(0~100). 60=준비, 75=분할익절 제안", min_value=0, max_value=100, format="%.0f"),
+    "핵심근거": st.column_config.TextColumn(help="주요 판단 근거 최대 2개 요약 — 전체 목록은 행 선택 시 상세 패널에서 확인", width="medium"),
     "제안 Stop": st.column_config.NumberColumn(help="16장 — 최근 confirmed pivot low 기준 제안 손절가", format="%.0f"),
+}
+
+_SORT_OPTIONS = {
+    "우선순위 (기본: STOP→ENTRY→ADD→익절→READY→WAIT)": None,  # 이미 sort_decisions_for_report로 정렬된 순서 유지
+    "Reversal 점수 높은 순": lambda c: -c.decision.reversal_core_score,
+    "Pullback 점수 높은 순": lambda c: -c.decision.pullback_score,
+    "Late Stage 점수 높은 순": lambda c: -c.decision.late_stage_score,
 }
 
 
@@ -220,11 +256,40 @@ def render_dashboard() -> None:
         return
 
     cards = sort_decisions_for_report(cards)  # 21장: STOP/EXIT → ENTRY → ADD → TAKE_PROFIT_PARTIAL → READY → WAIT
+    total_count = len(cards)
+
+    # WAIT은 보통 종목 수가 가장 많고 실제 행동이 필요 없는 상태라, 기본 필터에서는
+    # 빼서 "지금 봐야 할 종목"만 먼저 보이게 한다 — 전체를 보려면 필터에서 다시 켜면 된다.
+    counts_all = Counter(c.decision.action.value for c in cards)
+    action_options = [a for a in counts_all if a != "WAIT"] + (["WAIT"] if "WAIT" in counts_all else [])
+    default_actions = [a for a in action_options if a != "WAIT"] or action_options
+
+    filter_col, sort_col = st.columns([2, 1])
+    with filter_col:
+        selected_actions = st.pills(
+            "빠른 필터 (Action)",
+            options=action_options,
+            selection_mode="multi",
+            default=default_actions,
+            key="dashboard_action_filter",
+        )
+    with sort_col:
+        sort_label = st.selectbox("정렬 기준", options=list(_SORT_OPTIONS), key="dashboard_sort")
+
+    cards = [c for c in cards if c.decision.action.value in selected_actions]
+    sort_key = _SORT_OPTIONS[sort_label]
+    if sort_key is not None:
+        cards = sorted(cards, key=sort_key)
+
     cards_by_symbol = {c.decision.symbol: c for c in cards}
 
     counts = Counter(c.decision.action.value for c in cards)
-    summary = " · ".join(f"{action} {n}" for action, n in counts.items())
-    st.caption(f"{selected.isoformat()} 기준 {len(cards)}개 종목 — {summary}")
+    summary = " · ".join(f"{action} {n}" for action, n in counts.items()) if counts else "필터 결과 없음"
+    st.caption(f"{selected.isoformat()} 기준 {len(cards)}/{total_count}개 종목 — {summary}")
+
+    if not cards:
+        st.info("선택한 필터에 해당하는 종목이 없습니다. 위 '빠른 필터'에서 Action을 추가로 선택해라.")
+        return
 
     table = _build_summary_table(cards)
     event = st.dataframe(
