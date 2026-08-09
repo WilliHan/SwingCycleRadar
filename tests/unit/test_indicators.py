@@ -15,6 +15,7 @@ from swingcycle.indicators.technical import (
     compute_ma5_distance,
     compute_macd,
     compute_rsi,
+    compute_supplementary_smas,
     compute_volume_oscillator,
     wilder_smooth,
 )
@@ -127,6 +128,14 @@ class TestVolumeOscillator:
         assert out.iloc[-1] == pytest.approx(expected)
 
 
+class TestSupplementarySmas:
+    def test_hand_calculation(self):
+        close = pd.Series([float(i) for i in range(1, 25)], index=_dates(24))  # 1..24
+        out = compute_supplementary_smas(close, windows=(20,))
+        expected = sum(range(5, 25)) / 20  # 마지막 20개 값(5..24) 평균 = 14.5
+        assert out["sma20"].iloc[-1] == pytest.approx(expected)
+
+
 class TestComputeAllIndicators:
     def _synthetic_bars(self, n: int) -> pd.DataFrame:
         rng = np.random.default_rng(42)
@@ -151,6 +160,7 @@ class TestComputeAllIndicators:
             "mdi_slope_1", "mdi_slope_3", "adx_falling", "adx_flattening",
             "adx_turn_up", "mdi_falling",
             "sma5", "ma5_distance_pct", "ma5_distance_delta_1", "ma5_distance_z20",
+            "sma20", "sma60", "sma120", "sma240",
             "volume_oscillator",
         }
         assert expected.issubset(set(out.columns))

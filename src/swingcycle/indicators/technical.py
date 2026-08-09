@@ -159,6 +159,12 @@ def compute_dmi_adx(
     })
 
 
+# ── 보조 이동평균 (7장 DB 스키마/28장 IndicatorSnapshot이 요구하나 8장엔 별도 공식
+#    없음 — 단순 이동평균이라 모호하지 않아 여기 추가한다. 14.1 "20일선 부근" 등에서 참조) ──
+def compute_supplementary_smas(close: pd.Series, windows: tuple[int, ...] = (20, 60, 120, 240)) -> pd.DataFrame:
+    return pd.DataFrame({f"sma{w}": close.rolling(w).mean() for w in windows})
+
+
 # ── 8.4 MA5 이격 ─────────────────────────────────────────────────────────
 def compute_ma5_distance(close: pd.Series, zscore_window: int = 20) -> pd.DataFrame:
     sma5 = close.rolling(5).mean()
@@ -211,8 +217,9 @@ def compute_all_indicators(
     )
     ma5_df = compute_ma5_distance(out["close"], zscore_window=ma5_zscore_window)
     vo = compute_volume_oscillator(out["volume"], method=vo_method, fast=vo_fast, slow=vo_slow)
+    sma_df = compute_supplementary_smas(out["close"])
 
-    for df in (macd_df, rsi_df, dmi_df, ma5_df):
+    for df in (macd_df, rsi_df, dmi_df, ma5_df, sma_df):
         out = out.join(df)
     out["volume_oscillator"] = vo
     return out

@@ -88,3 +88,9 @@ def has_active_trade_plan(conn: sqlite3.Connection, symbol: str) -> bool:
         "SELECT 1 FROM trade_plans WHERE symbol = ? AND status = 'ACTIVE' LIMIT 1", (symbol,)
     ).fetchone()
     return row is not None
+
+
+def get_symbol(conn: sqlite3.Connection, symbol: str) -> sqlite3.Row | None:
+    """symbols row 자체가 없는 경우도 있다(collectable_symbols의 ACTIVE-plan-only 케이스,
+    7.3 참고) — 호출부는 None을 종목명 미상 fallback으로 처리해야 한다."""
+    return conn.execute("SELECT * FROM symbols WHERE symbol = ?", (symbol,)).fetchone()

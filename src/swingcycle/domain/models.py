@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import date
 
-from .enums import Action, CycleState, Gate
+from .enums import Action, CycleState, EntryType, Gate
 
 
 @dataclass(frozen=True)
@@ -57,3 +57,4 @@ class Decision:
     action: Action
     reasons: list[str] = field(default_factory=list)
     stop_price: float | None = None
+    entry_type: EntryType | None = None  # action==ENTRY일 때만 의미 있음 (16.2 stop reference 선정용)
