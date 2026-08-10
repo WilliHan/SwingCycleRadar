@@ -45,9 +45,18 @@ class Settings(BaseSettings):
 
     mfgr_url: str = "http://localhost:8503"
 
+    # run_daily_batch_parquet.sh의 MFTS_PARQUET_DIR 기본값과 동일 경로 — 웹앱의
+    # "업데이트" 버튼이 셸 스크립트 없이 같은 parquet 캐시를 직접 읽을 때 재사용한다.
+    mfts_parquet_dir: str = "../MFTS/@RUN/cache/parquet"
+
     @property
     def db_path_resolved(self) -> Path:
         p = Path(self.db_path)
+        return p if p.is_absolute() else (PROJECT_ROOT / p)
+
+    @property
+    def mfts_parquet_dir_resolved(self) -> Path:
+        p = Path(self.mfts_parquet_dir)
         return p if p.is_absolute() else (PROJECT_ROOT / p)
 
     @property

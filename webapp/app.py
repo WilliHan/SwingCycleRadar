@@ -23,11 +23,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from common.hub_bridge import resolve_hub_identity  # noqa: E402
 from swingcycle.data.supabase_client import get_supabase_client  # noqa: E402
 from swingcycle.data.supabase_daily_sync import reconcile_recent_history  # noqa: E402
+from swingcycle.jobs.daily_collect_from_parquet import run_collect_from_parquet  # noqa: E402
+from swingcycle.jobs.daily_decide import run_decide  # noqa: E402
 from swingcycle.jobs.daily_report_job import get_report_cards  # noqa: E402
 from swingcycle.reports.daily_report import ReportCard, sort_decisions_for_report  # noqa: E402
 from swingcycle.repositories import decision_repo  # noqa: E402
 from swingcycle.repositories.db import get_connection, run_migrations  # noqa: E402
 from swingcycle.repositories.symbol_repo import has_active_trade_plan  # noqa: E402
+from swingcycle.settings import settings  # noqa: E402
 
 st.set_page_config(page_title="SwingCycle Radar", page_icon="🧭", layout="wide")
 
@@ -338,6 +341,7 @@ def render_dashboard() -> None:
 
         selected = st.date_input("조회 날짜", value=latest, max_value=date.today())
         cards = get_report_cards(conn, selected)
+        symbol_sort_order = dict(conn.execute("SELECT symbol, sort_order FROM symbols").fetchall())
     finally:
         conn.close()
 
@@ -363,11 +367,20 @@ def render_dashboard() -> None:
             default=default_actions,
             key="dashboard_action_filter",
         )
+    sort_options = {
+        **_SORT_OPTIONS,
+        "테마순": lambda c: (c.decision.friend_group or "", c.decision.symbol),
+        "사용자 지정 순서": lambda c: (
+            symbol_sort_order.get(c.decision.symbol)
+            if symbol_sort_order.get(c.decision.symbol) is not None else 999_999,
+            c.decision.symbol,
+        ),
+    }
     with sort_col:
-        sort_label = st.selectbox("정렬 기준", options=list(_SORT_OPTIONS), key="dashboard_sort")
+        sort_label = st.selectbox("정렬 기준", options=list(sort_options), key="dashboard_sort")
 
     cards = [c for c in cards if c.decision.action.value in selected_actions]
-    sort_key = _SORT_OPTIONS[sort_label]
+    sort_key = sort_options[sort_label]
     if sort_key is not None:
         cards = sorted(cards, key=sort_key)
 
@@ -429,15 +442,20 @@ def render_universe_management(identity) -> None:
 
     rows = client.table("swingcycle_symbols").select("*").order("symbol").execute().data or []
     df = pd.DataFrame(rows) if rows else pd.DataFrame(
-        columns=["symbol", "name", "market", "friend_group", "enabled", "note"]
+        columns=["symbol", "name", "market", "friend_group", "sort_order", "enabled", "note"]
     )
+    if "sort_order" not in df.columns:  # 스키마 반영 전(Supabase ALTER 미실행) 과도기 방어
+        df["sort_order"] = None
+    if not df.empty:
+        df = df.sort_values(["sort_order", "symbol"], na_position="last").reset_index(drop=True)
 
     if identity is None:
         st.warning("허브 인증 정보를 확인할 수 없습니다 — 읽기 전용으로 표시합니다.")
 
     st.caption(
         "표에서 행을 지우면 즉시 삭제되지 않고 **비활성화(enabled=false)** 됩니다. "
-        "완전 삭제는 아래 '완전 삭제' 섹션에서 별도로 확인 후 진행하세요."
+        "완전 삭제는 아래 '완전 삭제' 섹션에서 별도로 확인 후 진행하세요. "
+        "**순번**을 지정하면 이 표와 대시보드('사용자 지정 순서' 정렬)에서 그 순서대로 보입니다."
     )
     edited = st.data_editor(
         df,
@@ -450,6 +468,7 @@ def render_universe_management(identity) -> None:
             "name": st.column_config.TextColumn("종목명"),
             "market": st.column_config.TextColumn("시장"),
             "friend_group": st.column_config.TextColumn("테마"),
+            "sort_order": st.column_config.NumberColumn("순번", min_value=0, step=1),
             "enabled": st.column_config.CheckboxColumn("활성화"),
             "note": st.column_config.TextColumn("비고"),
             "created_at": st.column_config.TextColumn("생성일시"),
@@ -458,14 +477,24 @@ def render_universe_management(identity) -> None:
         },
     )
 
-    if st.button("저장", disabled=identity is None):
-        _save_universe_diff(client, df, edited, identity)
+    save_col, update_col = st.columns(2)
+    with save_col:
+        if st.button("저장", disabled=identity is None):
+            _save_universe_diff(client, df, edited, identity)
+    with update_col:
+        if st.button("저장 + 업데이트", disabled=identity is None):
+            _update_universe_and_batch(client, df, edited, identity)
+    st.caption(
+        "업데이트: 저장 후 곧바로 MFTS parquet 캐시에서 시세를 읽어 지표/판정을 계산하고 "
+        "Supabase에도 기록합니다 — 종목 수에 비례해 수십 초~수 분 걸릴 수 있습니다 "
+        "(안 눌러도 매일 밤 배치가 자동으로 처리합니다)."
+    )
 
     if not df.empty:
         _render_hard_delete_section(client, df, identity)
 
 
-def _save_universe_diff(client, original: pd.DataFrame, edited: pd.DataFrame, identity) -> None:
+def _upsert_universe_rows(client, original: pd.DataFrame, edited: pd.DataFrame, identity) -> dict:
     """행 삭제는 soft-disable(enabled=false)로만 반영한다 — 완전 삭제는 별도 확인 절차(8장) 필요.
 
     전문가 리뷰에서 발견된 버그 수정: 이전에는 표에서 행이 사라지면 바로
@@ -474,6 +503,10 @@ def _save_universe_diff(client, original: pd.DataFrame, edited: pd.DataFrame, id
     original_symbols = set(original["symbol"]) if not original.empty else set()
     edited_symbols = set(edited["symbol"].dropna())
     removed_from_grid = original_symbols - edited_symbols
+
+    def _sort_order_of(row) -> int | None:
+        value = row.get("sort_order")
+        return None if value is None or pd.isna(value) else int(value)
 
     upsert_rows = []
     for _, row in edited.iterrows():
@@ -484,6 +517,7 @@ def _save_universe_diff(client, original: pd.DataFrame, edited: pd.DataFrame, id
             "name": row.get("name") or "",
             "market": row.get("market") or None,
             "friend_group": row.get("friend_group") or None,
+            "sort_order": _sort_order_of(row),
             "enabled": bool(row.get("enabled", True)),
             "note": row.get("note") or None,
             "updated_by": identity.email,
@@ -496,6 +530,7 @@ def _save_universe_diff(client, original: pd.DataFrame, edited: pd.DataFrame, id
             "name": original_row.get("name") or "",
             "market": original_row.get("market") or None,
             "friend_group": original_row.get("friend_group") or None,
+            "sort_order": _sort_order_of(original_row),
             "enabled": False,
             "note": original_row.get("note") or None,
             "updated_by": identity.email,
@@ -504,7 +539,41 @@ def _save_universe_diff(client, original: pd.DataFrame, edited: pd.DataFrame, id
     if upsert_rows:
         client.table("swingcycle_symbols").upsert(upsert_rows).execute()
 
-    st.success(f"저장 완료: upsert {len(upsert_rows)}건 (표에서 지운 {len(removed_from_grid)}건은 비활성화 처리)")
+    return {"upserts": len(upsert_rows), "disabled": len(removed_from_grid)}
+
+
+def _save_universe_diff(client, original: pd.DataFrame, edited: pd.DataFrame, identity) -> None:
+    result = _upsert_universe_rows(client, original, edited, identity)
+    st.success(f"저장 완료: upsert {result['upserts']}건 (표에서 지운 {result['disabled']}건은 비활성화 처리)")
+    st.rerun()
+
+
+def _update_universe_and_batch(client, original: pd.DataFrame, edited: pd.DataFrame, identity) -> None:
+    """저장 + 즉시 배치(collect-parquet -> decide) 실행 — 새로 추가한 종목이 다음 크론을
+    기다리지 않고 바로 대시보드에 보이게 한다. 기존 종목은 idempotent라 그냥 스킵된다."""
+    result = _upsert_universe_rows(client, original, edited, identity)
+
+    with st.spinner("업데이트 중 — parquet 수집 + 지표 계산 (몇 분 걸릴 수 있습니다)..."):
+        run_migrations()
+        conn = get_connection()
+        try:
+            trade_date_ = decision_repo.get_latest_trade_date(conn) or date.today()
+        finally:
+            conn.close()
+
+        try:
+            collect_result = run_collect_from_parquet(trade_date_, str(settings.mfts_parquet_dir_resolved))
+            decide_result = run_decide(trade_date_)
+        except Exception as exc:  # noqa: BLE001 — 저장은 이미 끝났으니 배치 실패로 화면이 죽으면 안 됨
+            logger.exception("[universe] 업데이트 배치 실패")
+            st.error(f"저장은 완료됐지만 배치 실행 중 오류가 발생했습니다: {exc}")
+            return
+
+    st.success(
+        f"저장 완료(upsert {result['upserts']}건) + {trade_date_.isoformat()} 업데이트 완료 — "
+        f"수집 {collect_result.get('rows', 0)}행, 판정 처리 {decide_result.get('processed', 0)}건 "
+        f"(이미 처리됨 {decide_result.get('skipped_already_done', 0)}건)"
+    )
     st.rerun()
 
 

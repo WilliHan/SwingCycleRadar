@@ -104,6 +104,23 @@ def test_sync_from_supabase_pulls_market_when_local_missing(conn):
     assert row["market"] == "KOSPI"
 
 
+def test_sync_from_supabase_applies_sort_order(conn):
+    """sort_order는 market과 달리 이 UI(Supabase) 하나에서만 편집되므로 로컬 우선순위
+    병합 없이 Supabase 값을 그대로 반영해야 한다."""
+    symbol_repo.sync_from_supabase(conn, [
+        {"symbol": "005930", "name": "삼성전자", "friend_group": "semiconductor", "enabled": True, "sort_order": 3},
+    ])
+    row = conn.execute("SELECT sort_order FROM symbols WHERE symbol='005930'").fetchone()
+    assert row["sort_order"] == 3
+
+    # Supabase 쪽에서 값이 바뀌면(재정렬) 다음 동기화 때 그대로 갱신돼야 한다.
+    symbol_repo.sync_from_supabase(conn, [
+        {"symbol": "005930", "name": "삼성전자", "friend_group": "semiconductor", "enabled": True, "sort_order": 7},
+    ])
+    row = conn.execute("SELECT sort_order FROM symbols WHERE symbol='005930'").fetchone()
+    assert row["sort_order"] == 7
+
+
 def test_sync_from_supabase_local_market_wins_over_supabase(conn):
     symbol_repo.sync_from_supabase(conn, [{"symbol": "005930", "name": "삼성전자", "friend_group": "semiconductor", "enabled": True}])
     symbol_repo.backfill_market_if_missing(conn, "005930", "KOSPI")

@@ -27,16 +27,20 @@ def sync_from_supabase(conn: sqlite3.Connection, supabase_rows: list[dict]) -> N
         market = local_market or row.get("market") or None
         conn.execute(
             """
-            INSERT INTO symbols (symbol, name, market, friend_group, enabled, deleted_upstream, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+            INSERT INTO symbols (symbol, name, market, friend_group, enabled, sort_order, deleted_upstream, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
             ON CONFLICT(symbol) DO UPDATE SET
                 name = excluded.name,
                 friend_group = excluded.friend_group,
                 enabled = excluded.enabled,
+                sort_order = excluded.sort_order,
                 deleted_upstream = 0,
                 updated_at = excluded.updated_at
             """,
-            (row["symbol"], row["name"], market, row.get("friend_group"), int(bool(row.get("enabled", True))), now, now),
+            (
+                row["symbol"], row["name"], market, row.get("friend_group"),
+                int(bool(row.get("enabled", True))), row.get("sort_order"), now, now,
+            ),
         )
 
     local_symbols = {r["symbol"] for r in conn.execute("SELECT symbol FROM symbols").fetchall()}
