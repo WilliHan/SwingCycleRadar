@@ -15,6 +15,8 @@ from datetime import date
 
 from ..domain.enums import Action
 
+from ..data.supabase_client import get_supabase_client
+from ..data.supabase_daily_sync import push_daily_snapshot, reconcile_recent_history
 from ..data.trading_calendar import NoTradingDayError, ensure_trading_day
 from ..indicators.technical import compute_all_indicators
 from ..repositories import daily_bar_repo, decision_repo, symbol_repo
@@ -167,6 +169,11 @@ def run_decide(trade_date: date, force: bool = False, stop_buffer_pct: float = 1
     conn = get_connection()
     try:
         try:
+            reconcile_recent_history(conn, get_supabase_client())
+        except Exception as exc:  # noqa: BLE001 — 미설정/네트워크/스키마 문제로 배치가 죽으면 안 됨
+            logger.warning("[daily_decide] Supabase 이력 보완 건너뜀: %s", exc)
+
+        try:
             ensure_trading_day(trade_date)
         except NoTradingDayError as exc:
             logger.info("[daily_decide] %s", exc)
@@ -208,6 +215,12 @@ def run_decide(trade_date: date, force: bool = False, stop_buffer_pct: float = 1
             trade_date.isoformat(), counts["processed"], counts["stopped"],
             counts["skipped_no_data"], counts["skipped_already_done"], len(errors),
         )
+
+        try:
+            push_daily_snapshot(get_supabase_client(), trade_date, conn)
+        except Exception as exc:  # noqa: BLE001 — 미설정/네트워크/스키마 문제로 배치가 죽으면 안 됨
+            logger.warning("[daily_decide] Supabase 기록 건너뜀: %s", exc)
+
         return {
             "status": "OK", "trade_date": trade_date.isoformat(),
             **counts, "errors": errors,

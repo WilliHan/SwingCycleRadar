@@ -24,6 +24,16 @@ def conn(tmp_path, monkeypatch):
     c.close()
 
 
+@pytest.fixture(autouse=True)
+def _no_supabase(monkeypatch):
+    """run_decide()의 Supabase 이력 보완/기록은 이 테스트들의 관심사가 아니다 — 네트워크
+    호출 없이 "미설정"과 동일하게 건너뛰도록 한다."""
+    monkeypatch.setattr(
+        "swingcycle.jobs.daily_decide.get_supabase_client",
+        lambda: (_ for _ in ()).throw(RuntimeError("no supabase in test")),
+    )
+
+
 def _seed_symbol_and_bars(conn, symbol: str, n_days: int) -> date:
     conn.execute(
         "INSERT INTO symbols (symbol, name, market, sector_group, friend_group, enabled, deleted_upstream, note, created_at, updated_at) "

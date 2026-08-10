@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from common.hub_bridge import resolve_hub_identity  # noqa: E402
 from swingcycle.data.supabase_client import get_supabase_client  # noqa: E402
+from swingcycle.data.supabase_daily_sync import reconcile_recent_history  # noqa: E402
 from swingcycle.jobs.daily_report_job import get_report_cards  # noqa: E402
 from swingcycle.reports.daily_report import ReportCard, sort_decisions_for_report  # noqa: E402
 from swingcycle.repositories import decision_repo  # noqa: E402
@@ -299,6 +300,22 @@ _SORT_OPTIONS = {
 }
 
 
+@st.cache_data(ttl=300)
+def _reconcile_recent_history_cached() -> dict | None:
+    """Supabase에는 있지만 로컬엔 없는 최근 이력만 보완 — 대시보드 rerun마다(필터 클릭 등)
+    매번 네트워크를 때리지 않도록 5분에 한 번만 실제로 호출한다. dev/prod가 서로 다른
+    로컬 SQLite 이력을 갖고 있어 상승/하락 화살표 등이 환경마다 다르게 보이던 문제(새
+    환경 부트스트랩 시 이력 부족)를 자동으로 메운다."""
+    conn = get_connection()
+    try:
+        return reconcile_recent_history(conn, get_supabase_client())
+    except Exception as exc:  # noqa: BLE001 — 미설정/네트워크 문제로 대시보드가 죽으면 안 됨
+        logger.warning("[dashboard] Supabase 이력 보완 건너뜀: %s", exc)
+        return None
+    finally:
+        conn.close()
+
+
 def render_dashboard() -> None:
     st.subheader("대시보드")
     _render_legend()
@@ -308,6 +325,7 @@ def render_dashboard() -> None:
     # 대시보드 자체가 크래시한다(실제로 이 세션에서 겪은 버그 — SCR을 먼저 띄우고
     # 나중에 CLI로 collect/decide를 처음 돌렸더니 그 사이에 대시보드가 이 예외로 죽었음).
     run_migrations()
+    _reconcile_recent_history_cached()
     conn = get_connection()
     try:
         latest = decision_repo.get_latest_trade_date(conn)
