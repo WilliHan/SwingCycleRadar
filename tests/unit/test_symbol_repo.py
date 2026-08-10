@@ -91,3 +91,43 @@ def test_backfill_market_does_not_override_manual_value(conn):
 
     row = conn.execute("SELECT market FROM symbols WHERE symbol='005930'").fetchone()
     assert row["market"] == "KOSPI"
+
+
+def test_sync_from_supabase_pulls_market_when_local_missing(conn):
+    """KRX 직접수집이 없는 배포(예: parquet 전용 Oracle)에서도 Supabase에 이미 채워진
+    market을 로컬 캐시로 끌어와야 한다."""
+    symbol_repo.sync_from_supabase(conn, [
+        {"symbol": "005930", "name": "삼성전자", "friend_group": "semiconductor", "enabled": True, "market": "KOSPI"},
+    ])
+
+    row = conn.execute("SELECT market FROM symbols WHERE symbol='005930'").fetchone()
+    assert row["market"] == "KOSPI"
+
+
+def test_sync_from_supabase_local_market_wins_over_supabase(conn):
+    symbol_repo.sync_from_supabase(conn, [{"symbol": "005930", "name": "삼성전자", "friend_group": "semiconductor", "enabled": True}])
+    symbol_repo.backfill_market_if_missing(conn, "005930", "KOSPI")
+
+    # Supabase 쪽 값이 다르더라도(오탈자 등) 로컬이 이미 확정한 값을 덮어쓰지 않는다
+    symbol_repo.sync_from_supabase(conn, [
+        {"symbol": "005930", "name": "삼성전자", "friend_group": "semiconductor", "enabled": True, "market": "KOSDAQ"},
+    ])
+
+    row = conn.execute("SELECT market FROM symbols WHERE symbol='005930'").fetchone()
+    assert row["market"] == "KOSPI"
+
+
+def test_select_new_market_backfills_skips_when_supabase_already_has_value():
+    krx_rows = [{"symbol": "005930", "market": "KOSPI"}]
+    updates = symbol_repo.select_new_market_backfills(krx_rows, {"005930": "KOSPI"})
+    assert updates == []
+
+
+def test_select_new_market_backfills_includes_when_supabase_missing():
+    krx_rows = [
+        {"symbol": "005930", "market": "KOSPI"},
+        {"symbol": "005930", "market": "KOSPI"},  # 같은 종목 중복 row(여러 날짜 등) -> 한 번만
+        {"symbol": "000660", "market": None},  # market 미상 -> 대상에서 제외
+    ]
+    updates = symbol_repo.select_new_market_backfills(krx_rows, {"005930": None, "000660": None})
+    assert updates == [{"symbol": "005930", "market": "KOSPI"}]

@@ -21,7 +21,10 @@ def sync_from_supabase(conn: sqlite3.Connection, supabase_rows: list[dict]) -> N
 
     for row in supabase_rows:
         existing = conn.execute("SELECT market FROM symbols WHERE symbol = ?", (row["symbol"],)).fetchone()
-        market = existing["market"] if existing and existing["market"] else None
+        local_market = existing["market"] if existing and existing["market"] else None
+        # 로컬 값이 이미 있으면 그대로 존중, 없으면 Supabase 쪽 값으로 채운다(예: KRX 직접수집
+        # 경로가 없는 배포 — 로컬에서 market을 알아낼 방법이 아예 없는 parquet 경로).
+        market = local_market or row.get("market") or None
         conn.execute(
             """
             INSERT INTO symbols (symbol, name, market, friend_group, enabled, deleted_upstream, created_at, updated_at)
@@ -53,6 +56,29 @@ def backfill_market_if_missing(conn: sqlite3.Connection, symbol: str, market: st
         (market, symbol),
     )
     conn.commit()
+
+
+def select_new_market_backfills(
+    krx_rows: list[dict], supabase_market_by_symbol: dict[str, str | None]
+) -> list[dict]:
+    """KRX 응답에서 market을 얻었고 Supabase 쪽엔 아직 비어있는 종목만 골라 push 대상으로 만든다.
+
+    backfill_market_if_missing은 로컬 SQLite만 갱신하고 Supabase(종목관리 UI가 보는 원본)에는
+    반영하지 않던 설계 공백을 메운다. 이미 Supabase에 값이 있으면(수동 보정 포함) 건드리지 않는다.
+    """
+    updates = []
+    seen = set()
+    for row in krx_rows:
+        symbol, market = row.get("symbol"), row.get("market")
+        if market and symbol not in seen and not supabase_market_by_symbol.get(symbol):
+            updates.append({"symbol": symbol, "market": market})
+            seen.add(symbol)
+    return updates
+
+
+def push_market_backfill_to_supabase(client, updates: list[dict]) -> None:
+    if updates:
+        client.table("swingcycle_symbols").upsert(updates).execute()
 
 
 def active_symbols(conn: sqlite3.Connection) -> list[str]:

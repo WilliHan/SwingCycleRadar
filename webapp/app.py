@@ -427,6 +427,17 @@ def render_universe_management(identity) -> None:
         disabled=identity is None,
         use_container_width=True,
         key="universe_editor",
+        column_config={
+            "symbol": st.column_config.TextColumn("종목코드"),
+            "name": st.column_config.TextColumn("종목명"),
+            "market": st.column_config.TextColumn("시장"),
+            "friend_group": st.column_config.TextColumn("테마"),
+            "enabled": st.column_config.CheckboxColumn("활성화"),
+            "note": st.column_config.TextColumn("비고"),
+            "created_at": st.column_config.TextColumn("생성일시"),
+            "updated_at": st.column_config.TextColumn("수정일시"),
+            "updated_by": st.column_config.TextColumn("수정자"),
+        },
     )
 
     if st.button("저장", disabled=identity is None):
