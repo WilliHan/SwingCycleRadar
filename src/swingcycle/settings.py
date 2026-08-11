@@ -49,6 +49,15 @@ class Settings(BaseSettings):
     # "업데이트" 버튼이 셸 스크립트 없이 같은 parquet 캐시를 직접 읽을 때 재사용한다.
     mfts_parquet_dir: str = "../MFTS/@RUN/cache/parquet"
 
+    # 개발 환경(ENV != production)의 parquet 캐시는 전체 시장이 아니라 소규모 개인
+    # 캐시라, "저장+업데이트"가 Oracle(전체 시장 parquet 보유)에 SSH로 위임할 때 쓴다
+    # (webapp/app.py._run_remote_update_via_ssh). Oracle 자신은 ENV=production이라
+    # 이 값 자체를 안 쓴다 — 로컬 .env에만 채우면 된다.
+    oracle_ssh_host: str = ""
+    oracle_ssh_user: str = "ubuntu"
+    oracle_ssh_key_path: str = "~/.ssh/ssh-key-2026-05-19.key"
+    oracle_project_dir: str = "~/projects/SwingCycle"
+
     @property
     def db_path_resolved(self) -> Path:
         p = Path(self.db_path)

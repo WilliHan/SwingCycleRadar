@@ -8,7 +8,10 @@ Hub 게이트만으로 인증(MFTS 패턴, 4.3) — 앱 내부 로그인 폼 없
 from __future__ import annotations
 
 import io
+import json
 import logging
+import os
+import subprocess
 import sys
 from collections import Counter
 from datetime import date
@@ -23,9 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from common.hub_bridge import resolve_hub_identity  # noqa: E402
 from swingcycle.data.supabase_client import get_supabase_client  # noqa: E402
 from swingcycle.data.supabase_daily_sync import reconcile_recent_history  # noqa: E402
-from swingcycle.jobs.daily_collect_from_parquet import run_collect_from_parquet  # noqa: E402
-from swingcycle.jobs.daily_decide import run_decide  # noqa: E402
 from swingcycle.jobs.daily_report_job import get_report_cards  # noqa: E402
+from swingcycle.jobs.update_latest import run_update_latest  # noqa: E402
 from swingcycle.reports.daily_report import ReportCard, sort_decisions_for_report  # noqa: E402
 from swingcycle.repositories import decision_repo  # noqa: E402
 from swingcycle.repositories.db import get_connection, run_migrations  # noqa: E402
@@ -550,26 +552,54 @@ def _save_universe_diff(client, original: pd.DataFrame, edited: pd.DataFrame, id
     st.rerun()
 
 
+def _run_remote_update_via_ssh() -> tuple[date, dict, dict]:
+    """개발 환경의 parquet 캐시는 전체 시장이 아니라 소규모 개인 캐시라, Oracle(전체
+    시장 parquet 보유)에 SSH로 위임해서 처리한다. Oracle이 방금 Supabase에 올린 결과를
+    reconcile_recent_history로 곧바로 로컬에 당겨온다(대시보드의 5분 캐시를 안 기다림).
+
+    ORACLE_SSH_HOST가 비어있으면(미설정) 조용히 로컬 처리로 폴백한다."""
+    if not settings.oracle_ssh_host:
+        return run_update_latest()
+
+    cmd = [
+        "ssh", "-i", str(Path(settings.oracle_ssh_key_path).expanduser()),
+        "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new",
+        f"{settings.oracle_ssh_user}@{settings.oracle_ssh_host}",
+        f"cd {settings.oracle_project_dir} && .venv/bin/swingcycle update-latest",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+    if result.returncode != 0:
+        raise RuntimeError(f"Oracle 원격 실행 실패(exit={result.returncode}): {result.stderr[-500:]}")
+
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    trade_date_ = date.fromisoformat(payload["trade_date"])
+
+    conn = get_connection()
+    try:
+        reconcile_recent_history(conn, get_supabase_client())
+    finally:
+        conn.close()
+
+    return trade_date_, payload["collect"], payload["decide"]
+
+
 def _run_universe_batch() -> tuple[date, dict, dict] | None:
     """collect-parquet -> decide를 재사용해 즉시 실행 — 새로 추가한 종목이 다음 크론을
     기다리지 않고 바로 대시보드에 보이게 한다. 기존 종목은 idempotent라 그냥 스킵된다.
-    trade_date는 오늘이 아니라 로컬에 이미 있는 최신 판정일을 쓴다(장중에 실행해도
-    대시보드가 보는 날짜와 어긋나지 않도록 — 오늘 날짜를 쓰면 당일 parquet이 아직
-    안 채워져 새 종목까지 skipped_no_data로 빠질 수 있다).
+
+    Oracle 자신(ENV=production)은 이미 전체 시장 parquet을 갖고 있으므로 그대로 로컬
+    처리한다. 개발 환경은 자체 캐시가 작으므로 Oracle에 SSH로 위임한다(사용자 요청:
+    "로컬에서 새 종목을 추가하면 Oracle에 전달해서 Oracle 전체 parquet으로 처리하고
+    Supabase 업데이트 결과를 로컬 화면에 반영").
 
     실패해도 예외를 올리지 않고 st.error만 띄운다 — 호출부(저장/업로드)는 이미 끝난
     상태라 배치 실패로 화면 전체가 죽으면 안 된다. 실패 시 None을 반환한다."""
     with st.spinner("업데이트 중 — parquet 수집 + 지표 계산 (몇 분 걸릴 수 있습니다)..."):
-        run_migrations()
-        conn = get_connection()
         try:
-            trade_date_ = decision_repo.get_latest_trade_date(conn) or date.today()
-        finally:
-            conn.close()
-
-        try:
-            collect_result = run_collect_from_parquet(trade_date_, str(settings.mfts_parquet_dir_resolved))
-            decide_result = run_decide(trade_date_)
+            if os.getenv("ENV", "local") == "production":
+                trade_date_, collect_result, decide_result = run_update_latest()
+            else:
+                trade_date_, collect_result, decide_result = _run_remote_update_via_ssh()
         except Exception as exc:  # noqa: BLE001 — 저장은 이미 끝났으니 배치 실패로 화면이 죽으면 안 됨
             logger.exception("[universe] 업데이트 배치 실패")
             st.error(f"저장은 완료됐지만 배치 실행 중 오류가 발생했습니다: {exc}")

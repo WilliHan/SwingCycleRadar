@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import date, datetime
 
@@ -7,6 +8,7 @@ from .jobs.daily_collect import run_collect
 from .jobs.daily_collect_from_parquet import run_collect_from_parquet
 from .jobs.daily_decide import run_decide
 from .jobs.daily_report_job import run_report
+from .jobs.update_latest import run_update_latest
 from .settings import settings
 
 # 각 jobs/*.py는 logging.getLogger(...)만 만들고 basicConfig는 안 부른다 — 여기(실제
@@ -58,6 +60,20 @@ def report(date_: str = typer.Option(..., "--date", help="YYYY-MM-DD")) -> None:
     """설계서 21장/20장 3단계: data/exports/{date}/에 html/csv/json 리포트 저장(decide 다음 단계)."""
     result = run_report(_parse_date(date_))
     typer.echo(result)
+
+
+@app.command("update-latest")
+def update_latest() -> None:
+    """collect-parquet + decide를 "로컬에 이미 있는 최신 판정일"(없으면 오늘) 기준으로
+    실행하고 결과를 JSON 한 줄로 출력한다. webapp의 "저장+업데이트"가 개발 환경에서
+    SSH로 이 커맨드를 원격 실행해 stdout을 파싱하는 용도(공식 진입점은 여기, 로직은
+    jobs/update_latest.py에 있음)."""
+    trade_date_, collect_result, decide_result = run_update_latest()
+    typer.echo(json.dumps({
+        "trade_date": trade_date_.isoformat(),
+        "collect": collect_result,
+        "decide": decide_result,
+    }))
 
 
 if __name__ == "__main__":
