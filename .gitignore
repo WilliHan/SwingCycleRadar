@@ -15,4 +15,8 @@ data/exports/*
 .krx_shared/
 logs/
 
+# 개인 관심종목 스프레드시트(메모/시세 스냅샷 포함) — 종목관리 탭 엑셀 업로드용 원본,
+# 저장소엔 안 올림
+docs/절친종목_*.xlsx
+
 *:Zone.Identifier
