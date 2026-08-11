@@ -490,6 +490,8 @@ def render_universe_management(identity) -> None:
         "(안 눌러도 매일 밤 배치가 자동으로 처리합니다)."
     )
 
+    _render_universe_excel_upload(client, df, identity)
+
     if not df.empty:
         _render_hard_delete_section(client, df, identity)
 
@@ -548,11 +550,15 @@ def _save_universe_diff(client, original: pd.DataFrame, edited: pd.DataFrame, id
     st.rerun()
 
 
-def _update_universe_and_batch(client, original: pd.DataFrame, edited: pd.DataFrame, identity) -> None:
-    """저장 + 즉시 배치(collect-parquet -> decide) 실행 — 새로 추가한 종목이 다음 크론을
-    기다리지 않고 바로 대시보드에 보이게 한다. 기존 종목은 idempotent라 그냥 스킵된다."""
-    result = _upsert_universe_rows(client, original, edited, identity)
+def _run_universe_batch() -> tuple[date, dict, dict] | None:
+    """collect-parquet -> decide를 재사용해 즉시 실행 — 새로 추가한 종목이 다음 크론을
+    기다리지 않고 바로 대시보드에 보이게 한다. 기존 종목은 idempotent라 그냥 스킵된다.
+    trade_date는 오늘이 아니라 로컬에 이미 있는 최신 판정일을 쓴다(장중에 실행해도
+    대시보드가 보는 날짜와 어긋나지 않도록 — 오늘 날짜를 쓰면 당일 parquet이 아직
+    안 채워져 새 종목까지 skipped_no_data로 빠질 수 있다).
 
+    실패해도 예외를 올리지 않고 st.error만 띄운다 — 호출부(저장/업로드)는 이미 끝난
+    상태라 배치 실패로 화면 전체가 죽으면 안 된다. 실패 시 None을 반환한다."""
     with st.spinner("업데이트 중 — parquet 수집 + 지표 계산 (몇 분 걸릴 수 있습니다)..."):
         run_migrations()
         conn = get_connection()
@@ -567,7 +573,18 @@ def _update_universe_and_batch(client, original: pd.DataFrame, edited: pd.DataFr
         except Exception as exc:  # noqa: BLE001 — 저장은 이미 끝났으니 배치 실패로 화면이 죽으면 안 됨
             logger.exception("[universe] 업데이트 배치 실패")
             st.error(f"저장은 완료됐지만 배치 실행 중 오류가 발생했습니다: {exc}")
-            return
+            return None
+
+    return trade_date_, collect_result, decide_result
+
+
+def _update_universe_and_batch(client, original: pd.DataFrame, edited: pd.DataFrame, identity) -> None:
+    result = _upsert_universe_rows(client, original, edited, identity)
+
+    batch = _run_universe_batch()
+    if batch is None:
+        return
+    trade_date_, collect_result, decide_result = batch
 
     st.success(
         f"저장 완료(upsert {result['upserts']}건) + {trade_date_.isoformat()} 업데이트 완료 — "
@@ -575,6 +592,105 @@ def _update_universe_and_batch(client, original: pd.DataFrame, edited: pd.DataFr
         f"(이미 처리됨 {decide_result.get('skipped_already_done', 0)}건)"
     )
     st.rerun()
+
+
+_EXCEL_REQUIRED_COLUMNS = ("NO", "종목명", "종목코드")
+
+
+def _parse_universe_excel(uploaded_file) -> tuple[pd.DataFrame, list[str]]:
+    """개인 관심종목 스프레드시트(NO/종목명/종목코드/메모 + 그날의 시세 스냅샷 컬럼들)에서
+    우리 시스템과 관련있는 4개 컬럼만 뽑는다. 시세 컬럼(현재가/거래량/시가총액 등)은 버린다.
+
+    종목코드가 비어있는 행(코드 미확정 관심종목)은 결과에서 빼고 이름을 별도로 반환한다 —
+    symbol이 PK라 코드 없이는 반영할 수 없다."""
+    raw = pd.read_excel(uploaded_file)
+    missing = [c for c in _EXCEL_REQUIRED_COLUMNS if c not in raw.columns]
+    if missing:
+        raise ValueError(f"필수 컬럼이 없습니다: {missing} (NO/종목명/종목코드는 반드시 있어야 합니다)")
+
+    skipped = raw[raw["종목코드"].isna()]["종목명"].tolist()
+    valid = raw.dropna(subset=["종목코드"]).copy()
+
+    parsed = pd.DataFrame({
+        "symbol": valid["종목코드"].apply(lambda x: str(int(x)).zfill(6)),
+        "name": valid["종목명"],
+        "note": valid["메모"] if "메모" in valid.columns else None,
+        "sort_order": valid["NO"].astype(int),
+    })
+    parsed["note"] = parsed["note"].where(parsed["note"].notna(), None)
+    return parsed.reset_index(drop=True), skipped
+
+
+def _upload_universe_excel(client, current_df: pd.DataFrame, parsed: pd.DataFrame, identity) -> dict:
+    """market/friend_group은 엑셀에 없는 정보라, 이미 있는 종목이면 현재 값을 그대로
+    상속한다(덮어써서 지우면 안 됨 — market 컬럼을 부주의하게 upsert로 날렸던 실수를
+    반복하지 않기 위함). 파일에 있다는 것 자체를 "현재 관심종목"으로 보고 enabled=True."""
+    existing_by_symbol = (
+        current_df.set_index("symbol").to_dict("index") if not current_df.empty else {}
+    )
+    new_count = 0
+    upsert_rows = []
+    for _, row in parsed.iterrows():
+        existing = existing_by_symbol.get(row["symbol"])
+        if existing is None:
+            new_count += 1
+        upsert_rows.append({
+            "symbol": row["symbol"],
+            "name": row["name"],
+            "market": (existing or {}).get("market") or None,
+            "friend_group": (existing or {}).get("friend_group") or None,
+            "sort_order": int(row["sort_order"]),
+            "enabled": True,
+            "note": row["note"],
+            "updated_by": identity.email,
+        })
+
+    if upsert_rows:
+        client.table("swingcycle_symbols").upsert(upsert_rows).execute()
+
+    return {"new": new_count, "updated": len(upsert_rows) - new_count}
+
+
+def _render_universe_excel_upload(client, current_df: pd.DataFrame, identity) -> None:
+    with st.expander("절친종목 엑셀 업로드"):
+        st.caption(
+            "NO(순번)/종목명/종목코드/메모 컬럼이 있는 엑셀을 업로드하면 이 4개만 반영합니다 "
+            "(현재가 등 시세 컬럼은 무시). market/테마는 엑셀에 없으므로 기존 값을 그대로 유지합니다."
+        )
+        uploaded = st.file_uploader("엑셀 파일(.xlsx)", type=["xlsx"], key="universe_excel_uploader")
+        if uploaded is not None:
+            try:
+                parsed, skipped = _parse_universe_excel(uploaded)
+                st.session_state["excel_upload_preview"] = (uploaded.name, parsed, skipped)
+            except Exception as exc:  # noqa: BLE001 — 잘못된 파일이어도 화면이 죽으면 안 됨
+                st.error(f"엑셀 파싱 실패: {exc}")
+                st.session_state.pop("excel_upload_preview", None)
+
+        preview = st.session_state.get("excel_upload_preview")
+        if not preview:
+            return
+        file_name, parsed, skipped = preview
+        existing_symbols = set(current_df["symbol"]) if not current_df.empty else set()
+        new_count = len(set(parsed["symbol"]) - existing_symbols)
+        st.caption(
+            f"'{file_name}' — 신규 {new_count}건 / 업데이트 {len(parsed) - new_count}건"
+            + (f" / 종목코드 없어 건너뜀 {len(skipped)}건: {', '.join(skipped)}" if skipped else "")
+        )
+        st.dataframe(parsed, use_container_width=True)
+
+        if st.button("반영", disabled=identity is None, key="excel_upload_apply"):
+            result = _upload_universe_excel(client, current_df, parsed, identity)
+            batch = _run_universe_batch()
+            del st.session_state["excel_upload_preview"]
+            if batch is None:
+                return
+            trade_date_, collect_result, decide_result = batch
+            st.success(
+                f"업로드 반영 완료(신규 {result['new']}건 / 업데이트 {result['updated']}건) + "
+                f"{trade_date_.isoformat()} 업데이트 완료 — 수집 {collect_result.get('rows', 0)}행, "
+                f"판정 처리 {decide_result.get('processed', 0)}건"
+            )
+            st.rerun()
 
 
 def _render_hard_delete_section(client, df: pd.DataFrame, identity) -> None:
