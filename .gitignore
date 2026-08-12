@@ -19,4 +19,7 @@ logs/
 # 저장소엔 안 올림
 docs/절친종목_*.xlsx
 
+# 설계서 원본(docx) — 편집 중 계속 바뀌어 diff 노이즈만 생김, 저장소엔 안 올림
+docs/SwingCycle_Radar_Source_Level_Design_v1.0.docx
+
 *:Zone.Identifier
