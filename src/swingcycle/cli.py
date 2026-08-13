@@ -4,6 +4,7 @@ from datetime import date, datetime
 
 import typer
 
+from .data.trading_calendar import latest_completed_trading_day
 from .jobs.daily_collect import run_collect
 from .jobs.daily_collect_from_parquet import run_collect_from_parquet
 from .jobs.daily_decide import run_decide
@@ -60,6 +61,15 @@ def report(date_: str = typer.Option(..., "--date", help="YYYY-MM-DD")) -> None:
     """설계서 21장/20장 3단계: data/exports/{date}/에 html/csv/json 리포트 저장(decide 다음 단계)."""
     result = run_report(_parse_date(date_))
     typer.echo(result)
+
+
+@app.command("latest-trading-day")
+def latest_trading_day() -> None:
+    """MFTS의 KST 01:00 배치가 채워둔 "직전 거래일"과 동일한 정책으로 계산한
+    날짜(YYYY-MM-DD)를 stdout에 한 줄로 출력한다. run_daily_batch_parquet.sh가
+    --date 미지정 시 이 값을 기본 대상일로 쓴다(단순 "오늘"을 쓰면 MFTS가 아직
+    채우지 않은 날짜를 요청하게 됨 — 2026-08-11~08-12 장애 원인)."""
+    typer.echo(latest_completed_trading_day().isoformat())
 
 
 @app.command("update-latest")

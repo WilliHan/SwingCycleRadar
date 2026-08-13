@@ -6,15 +6,21 @@
 # (MFTS_PARQUET_DIR). SwingCycle과 MFTS가 같은 서버에 없으면 이 스크립트 대신
 # run_daily_batch.sh(KRX 직접수집)를 써야 한다.
 #
-# Oracle 서버 크론 등록 예 — MFTS 수집 크론은 18:30 KST에 시작하지만 전종목(약 2,800개)
-# 수집이라 실제로는 22:40~22:46 KST경 완료된다(2026-08-03~08-07 로그 실측). 03:30/04:00대에
-# 돌리면 아직 오늘자 parquet이 안 채워져 있어 전량 stale 처리된다(2026-08-09 최초 배포 때
-# 06:05 KST 실행 시 실제로 겪은 문제) — 반드시 MFTS 완료 이후로 여유를 두고 기동할 것:
-#   30 23 * * 1-5 /home/ubuntu/projects/SwingCycle/run_daily_batch_parquet.sh \
+# **2026-08-13 스케줄 변경**: MFTS의 전종목 수집 크론이(원래 18:30 KST 시작 →
+# 22:40경 완료였던 것에서) KST 01:00 시작(직전 거래일 데이터, 약 4시간 소요 →
+# 04:50~05:00경 완료)으로 바뀌었다. 이 스크립트는 여전히 23:30 KST(같은 날 밤)에
+# "오늘" 날짜로 돌고 있었는데, MFTS가 "오늘" 데이터를 실제로 채우는 시점은 그
+# 다음날 새벽이라 매번 전 종목이 stale 처리되는 장애가 발생했다(2026-08-11,
+# 08-12 실측 — universe 62종목 전부 skipped_no_data). 그래서:
+#   1) 기본 대상일을 "오늘"이 아니라 `swingcycle latest-trading-day`(MFTS의
+#      직전 거래일 계산 정책과 동일)로 바꿨다 — 아래 참고.
+#   2) Oracle 크론 시각도 MFTS 완료(~05:00) 이후로 옮겨야 한다:
+#   30 5 * * 1-5 /home/ubuntu/projects/SwingCycle/run_daily_batch_parquet.sh \
 #       >> /home/ubuntu/projects/SwingCycle/logs/cron_daily_batch_parquet.log 2>&1
+# (기존 `30 23 * * 1-5` 등록은 위 크론으로 교체해야 한다 — crontab -e로 직접 반영 필요)
 #
 # 사용: bash run_daily_batch_parquet.sh [YYYY-MM-DD] [MFTS_PARQUET_DIR]
-#       (둘 다 생략 시 오늘 날짜 / ../MFTS/@RUN/cache/parquet)
+#       (날짜 생략 시 `swingcycle latest-trading-day`가 계산한 직전 거래일 사용)
 
 set -euo pipefail
 
@@ -24,9 +30,6 @@ cd "${SCRIPT_DIR}"
 SWINGCYCLE="${SCRIPT_DIR}/.venv/bin/swingcycle"
 LOG_DIR="${SCRIPT_DIR}/logs"
 mkdir -p "${LOG_DIR}"
-
-TRADE_DATE="${1:-$(date +%Y-%m-%d)}"
-PARQUET_DIR="${2:-${MFTS_PARQUET_DIR:-${SCRIPT_DIR}/../MFTS/@RUN/cache/parquet}}"
 LOG_FILE="${LOG_DIR}/daily_batch_parquet_$(date +%Y%m).log"
 
 _log() {
@@ -37,6 +40,11 @@ if [[ ! -x "${SWINGCYCLE}" ]]; then
     _log "[ERROR] swingcycle 실행파일 없음: ${SWINGCYCLE} — .venv 설치 확인 필요"
     exit 1
 fi
+
+# 날짜 미지정 시 "오늘"이 아니라 MFTS의 직전 거래일 계산 정책과 동일한
+# `swingcycle latest-trading-day`를 기본값으로 쓴다(위 2026-08-13 주석 참고).
+TRADE_DATE="${1:-$("${SWINGCYCLE}" latest-trading-day)}"
+PARQUET_DIR="${2:-${MFTS_PARQUET_DIR:-${SCRIPT_DIR}/../MFTS/@RUN/cache/parquet}}"
 if [[ ! -d "${PARQUET_DIR}" ]]; then
     _log "[ERROR] parquet 캐시 디렉터리 없음: ${PARQUET_DIR}"
     exit 1
