@@ -14,9 +14,9 @@
 # 08-12 실측 — universe 62종목 전부 skipped_no_data). 그래서:
 #   1) 기본 대상일을 "오늘"이 아니라 `swingcycle latest-trading-day`(MFTS의
 #      직전 거래일 계산 정책과 동일)로 바꿨다 — 아래 참고.
-#   2) Oracle 크론 시각도 MFTS 완료(~05:00) 이후로 옮겨야 한다(아래 최신
-#      등록 예 참고, 요일 범위는 2026-08-16 변경분 반영됨).
-# (기존 `30 23 * * 1-5` 등록은 아래 크론으로 교체해야 한다 — crontab -e로 직접 반영 필요)
+#   2) Oracle 크론 시각도 MFTS 완료(~05:00) 이후로 옮겨야 한다고 판단해 시스템
+#      crontab에 `30 5 * * 1-6`으로 등록했었다 — 그러나 아래 2026-08-16 정정 참고.
+# (기존 `30 23 * * 1-5` 등록은 위 이유로 폐기)
 #
 # **2026-08-16 스케줄 변경**: MFTS/SwingCycle 크론 요일 범위를 `1-5`(평일)에서
 # `1-6`(월~토)로 넓혔다. 기존 `1-5`에서는 금요일 장 마감분을 처리하는 회차가
@@ -25,11 +25,17 @@
 # 유실은 아님 — `latest_completed_trading_day()`의 주말 스킵 로직이 월요일
 # 실행 시 금요일을 정상적으로 다시 찾아내 매주 자동으로 캐치업은 됐다.
 # 2026-08-14 발생분은 토요일인 2026-08-16에 수동 보정 배치로 즉시 메웠다).
-# `1-6`으로 넓히면 토요일 새벽에 곧바로 전날(금요일) 데이터를 처리해 지연이
-# 최대 하루로 줄어든다.
 #
-#   30 5 * * 1-6 /home/ubuntu/projects/SwingCycle/run_daily_batch_parquet.sh \
-#       >> /home/ubuntu/projects/SwingCycle/logs/cron_daily_batch_parquet.log 2>&1
+# **2026-08-16 정정 — 시스템 crontab 등록을 제거함**: 위 "2)"에서 등록한
+# 시스템 crontab(`30 5 * * 1-6`)이, MSS 프로젝트가 2026-08-09부터 이미 내부
+# APScheduler(`mss-collector.service` → `job_scheduler.py`의
+# `swingcycle_friend_universe` 잡, 평일 06:05 KST)로 이 스크립트를 서브프로세스
+# 실행하고 있던 것과 중복 등록이었다. 8/14(금) 실측 로그로 같은 거래일
+# (trade_date=2026-08-13)이 05:30과 06:05 두 번 처리된 것을 확인해 시스템
+# crontab 쪽을 제거했다 — MSS 쪽 06:05 잡이 pocket_pivot_mfts_eod(05:45)→
+# trss_mfts_eod(05:55) 이후로 의도적으로 순서를 둔 원본 등록이라 그쪽을 유지.
+# **현재 이 스크립트의 유일한 정기 실행 경로는 MSS의 `swingcycle_friend_universe`
+# 잡(06:05 KST)이다 — 시스템 crontab에는 절대 다시 등록하지 말 것.**
 #
 # 사용: bash run_daily_batch_parquet.sh [YYYY-MM-DD] [MFTS_PARQUET_DIR]
 #       (날짜 생략 시 `swingcycle latest-trading-day`가 계산한 직전 거래일 사용)
